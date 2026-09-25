@@ -740,6 +740,14 @@
   .driver-row .dfill{height:100%;border-radius:99px;}
   .driver-row .dval{font-weight:700;width:88px;text-align:right;}
 
+  .exp-table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  .exp-table th{text-align:left;color:var(--ink-dim);font-weight:600;font-size:10.5px;text-transform:uppercase;
+    letter-spacing:.3px;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;user-select:none;white-space:nowrap;}
+  .exp-table th:hover{color:var(--ink);}
+  .exp-table td{padding:9px 10px;border-bottom:1px solid var(--line);color:var(--ink);white-space:nowrap;}
+  .exp-table tbody tr{cursor:pointer;}
+  .exp-table tbody tr:hover{background:var(--panel2);}
+  .cat-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;}
   .catf-table{width:100%;border-collapse:collapse;font-size:12.3px;}
   .catf-table th{text-align:right;color:var(--ink-dim);font-weight:600;font-size:10.5px;text-transform:uppercase;
     letter-spacing:.3px;padding:0 6px 8px;}
@@ -1830,6 +1838,158 @@ function wireIncomeFilters(el){
   if(ce) ce.addEventListener('change',()=>{ incCompareCustom.end=ce.value; renderIncomeDashboard(el); });
 }
 
+/* ---------- Expenses page helpers ---------- */
+function daysInMonthCount(y,m){ return new Date(y,m+1,0).getDate(); }
+function monthDayLabel(y,m,day){ return new Date(y,m,day).toLocaleDateString(undefined,{month:'short',day:'numeric'}); }
+function dailySpendSeries(y,m){
+  const days=daysInMonthCount(y,m);
+  const arr=new Array(days).fill(0);
+  monthTx(y,m).filter(t=>t.kind==='spend').forEach(t=>{ const day=Number(t.date.slice(8,10)); if(day>=1&&day<=days) arr[day-1]+=t.amount; });
+  return arr;
+}
+function projectedMonthEnd(y,m){
+  const now=new Date(), days=daysInMonthCount(y,m);
+  const isCurMonth = now.getFullYear()===y && now.getMonth()===m;
+  const isPastMonth = new Date(y,m,1) < new Date(now.getFullYear(),now.getMonth(),1);
+  const elapsed = isCurMonth ? now.getDate() : (isPastMonth ? days : 0);
+  if(!elapsed) return null;
+  const vals=dailySpendSeries(y,m);
+  const soFar=vals.slice(0,elapsed).reduce((a,b)=>a+b,0);
+  return {value: soFar/elapsed*days, elapsed, days};
+}
+function expenseTrendChartSVG(y,m){
+  const vals=dailySpendSeries(y,m), days=vals.length;
+  if(!vals.some(v=>v>0)) return '<div class="empty">No spending recorded this month yet</div>';
+  const totalBudget=state.categories.filter(c=>c.budget).reduce((s,c)=>s+c.budget,0);
+  const budgetPerDay= totalBudget? totalBudget/days : 0;
+  const w=900,h=230,padT=20,padB=26,padX=10;
+  const maxV=Math.max(...vals,budgetPerDay,1);
+  const avg=vals.reduce((a,b)=>a+b,0)/days;
+  const peakIdx=vals.indexOf(Math.max(...vals));
+  const x=i=>padX+(days>1?(i/(days-1))*(w-padX*2):0);
+  const yy=v=>h-padB-(v/maxV)*(h-padT-padB);
+  const pts=vals.map((v,i)=>[x(i),yy(v)]);
+  const d=pts.map((p,i)=>(i===0?'M':'L')+p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  const area=d+` L${pts[days-1][0].toFixed(1)},${(h-padB).toFixed(1)} L${pts[0][0].toFixed(1)},${(h-padB).toFixed(1)} Z`;
+  const dots=vals.map((v,i)=>{
+    const isPeak=i===peakIdx && v>0;
+    return `<circle cx="${pts[i][0].toFixed(1)}" cy="${pts[i][1].toFixed(1)}" r="${isPeak?5:2.5}" fill="${isPeak?'var(--warn)':'var(--spend)'}"><title>${monthDayLabel(y,m,i+1)}: ${fmt(v)}</title></circle>`;
+  }).join('');
+  const budgetLine = budgetPerDay ? `<line x1="${padX}" y1="${yy(budgetPerDay).toFixed(1)}" x2="${w-padX}" y2="${yy(budgetPerDay).toFixed(1)}" stroke="var(--warn)" stroke-width="1.5" stroke-dasharray="5,4" opacity=".7"><title>Budget pace: ${fmt(budgetPerDay)}/day</title></line>` : '';
+  const stepLabels=Math.min(6,days), tickEvery=Math.max(1,Math.round(days/stepLabels));
+  let labels=''; for(let i=0;i<days;i+=tickEvery){ labels+=`<text x="${x(i).toFixed(1)}" y="${h-8}" font-size="10" fill="var(--ink-dim)" text-anchor="middle">${i+1}</text>`; }
+  return `<svg class="expense-trend-chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <defs><linearGradient id="etg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--spend)" stop-opacity=".28"/><stop offset="100%" stop-color="var(--spend)" stop-opacity="0"/>
+    </linearGradient></defs>
+    <path d="${area}" fill="url(#etg)"/>
+    <line x1="${padX}" y1="${yy(avg).toFixed(1)}" x2="${w-padX}" y2="${yy(avg).toFixed(1)}" stroke="var(--ink-dim)" stroke-width="1" stroke-dasharray="3,3" opacity=".6"><title>Average: ${fmt(avg)}/day</title></line>
+    ${budgetLine}
+    <path d="${d}" fill="none" stroke="var(--spend)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    ${dots}${labels}
+  </svg>`;
+}
+function expenseKpiCard(label,val,prevVal,color,vals,opts){
+  opts=opts||{};
+  const formatFn=opts.formatFn||fmt, badWhenUp=opts.badWhenUp===undefined?true:opts.badWhenUp;
+  const delta = prevVal ? ((val-prevVal)/Math.abs(prevVal))*100 : (val>0?100:0);
+  const dir = Math.abs(delta)<0.5?'flat':(delta>0?'up':'down');
+  const arrow = dir==='flat'?'→':(dir==='up'?'↑':'↓');
+  let trendClass='flat';
+  if(dir!=='flat' && badWhenUp!==null) trendClass = badWhenUp ? (dir==='up'?'down':'up') : dir;
+  return `<div class="kpi glass">
+    <div class="k-lbl">${label}</div>
+    <div class="k-val amt" style="color:${color}">${formatFn(val)}</div>
+    <div class="k-trend ${trendClass}">${arrow} ${Math.abs(delta).toFixed(0)}% vs last ${period==='monthly'?'month':'day'}</div>
+    ${sparkline(vals,color)}
+  </div>`;
+}
+function topCategoryBars(entries,total,prevByCat){
+  return entries.map(([cid,val])=>{
+    const c=catById(cid);
+    const pct = total? Math.round(val/total*100) : 0;
+    const prevVal=prevByCat[cid]||0;
+    const momDelta = prevVal ? ((val-prevVal)/prevVal*100) : (val>0?100:0);
+    const momDir = Math.abs(momDelta)<1?'flat':(momDelta>0?'up':'down');
+    const momCls = momDir==='flat'?'flat':(momDir==='up'?'down':'up');
+    const momArrow = momDir==='flat'?'→':(momDir==='up'?'↑':'↓');
+    return `<div class="budget-row">
+      <div class="bh"><span class="n">${c.icon||'📦'} ${c.name}</span>
+        <span class="v">${fmt(val)} · ${pct}% <span class="k-trend ${momCls}" style="display:inline-flex;margin-left:6px">${momArrow} ${Math.abs(momDelta).toFixed(0)}%</span></span></div>
+      <div class="budget-track"><div class="budget-fill" style="width:${pct}%;background:${c.color}"></div></div>
+    </div>`;
+  }).join('');
+}
+function expenseInsights(spend,prevSpend,byCat,prevByCat){
+  const out=[];
+  if(prevSpend>0){
+    const chg=pctDelta(spend,prevSpend);
+    if(Math.abs(chg)>=3) out.push({em:chg<0?'✅':'⚠️',html:`Spending ${chg<0?'reduced':'increased'} <b>${Math.abs(chg).toFixed(0)}%</b> compared to last ${period==='monthly'?'month':'day'}`});
+  }
+  state.categories.filter(c=>c.budget).forEach(c=>{
+    const used=byCat[c.id]||0;
+    if(used>c.budget) out.push({em:'⚠️',html:`${c.name} exceeded its ${fmt(c.budget)} budget by <b>${fmt(used-c.budget)}</b>`});
+    else if(used>0 && used<=c.budget*0.7) out.push({em:'✅',html:`${c.name} spending remains under budget (<b>${fmt(used)}</b> of ${fmt(c.budget)})`});
+  });
+  Object.entries(byCat).forEach(([cid,val])=>{
+    const prevVal=prevByCat[cid]||0;
+    if(prevVal>0){ const chg=pctDelta(val,prevVal); if(chg>=15) out.push({em:'⚠️',html:`${catById(cid).name} spending increased <b>${chg.toFixed(0)}%</b>`}); }
+  });
+  if(!out.length) out.push({em:'✅',html:'No notable changes detected — spending looks steady'});
+  return out.slice(0,6);
+}
+let expTableQuery='';
+let expTableSort={key:'date',dir:'desc'};
+function renderExpenseTable(spendTx){
+  const q=expTableQuery.trim().toLowerCase();
+  let rows=spendTx.filter(t=>{
+    if(!q) return true;
+    const c=catById(t.category);
+    return (t.note||'').toLowerCase().includes(q) || c.name.toLowerCase().includes(q) || (t.account||'').toLowerCase().includes(q) || (t.tags||[]).join(' ').toLowerCase().includes(q);
+  });
+  const {key,dir}=expTableSort;
+  rows=[...rows].sort((a,b)=>{
+    let av,bv;
+    if(key==='amount'){ av=a.amount; bv=b.amount; }
+    else if(key==='category'){ av=catById(a.category).name; bv=catById(b.category).name; }
+    else { av=a.date; bv=b.date; }
+    if(av<bv) return dir==='asc'?-1:1;
+    if(av>bv) return dir==='asc'?1:-1;
+    return 0;
+  });
+  const shown=rows.slice(0,10);
+  const arrow=k=> expTableSort.key===k ? (expTableSort.dir==='asc'?' ▲':' ▼') : '';
+  const trs=shown.map(t=>{
+    const c=catById(t.category);
+    const dLabel=new Date(t.date+'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'});
+    return `<tr data-id="${t.id}">
+      <td>${dLabel}</td>
+      <td>${t.note||c.name}</td>
+      <td><span class="cat-badge" style="background:${c.color}22;color:${c.color}">${c.icon||''} ${c.name}</span></td>
+      <td>${t.account||'—'}</td>
+      <td class="amt spend" style="text-align:right">-${fmt(Math.abs(t.amount))}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="card glass" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:2px;flex-wrap:wrap">
+      <div><h3 style="margin-bottom:2px">Transactions</h3><div class="sub" style="margin:0">${rows.length} matching · showing ${shown.length}</div></div>
+      <input type="text" id="expTableSearch" placeholder="Search merchant, category, tag…" value="${expTableQuery.replace(/"/g,'&quot;')}" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--ink);font-size:12.5px;outline:none;min-width:200px">
+    </div>
+    <div style="overflow-x:auto">
+    <table class="exp-table">
+      <thead><tr>
+        <th data-sort="date">Date${arrow('date')}</th>
+        <th>Merchant</th>
+        <th data-sort="category">Category${arrow('category')}</th>
+        <th>Account</th>
+        <th data-sort="amount" style="text-align:right">Amount${arrow('amount')}</th>
+      </tr></thead>
+      <tbody>${trs || '<tr><td colspan="5" class="empty">No transactions match</td></tr>'}</tbody>
+    </table>
+    </div>
+  </div>`;
+}
+
 function renderLeft(){
   const el=document.getElementById('leftCol');
   const {income,spend}=renderSidebarTotals();
@@ -1935,21 +2095,114 @@ function renderLeft(){
       <div class="dash-sub">${new Date(y,m,1).toLocaleDateString(undefined,{month:'long',year:'numeric'})}</div>
       <div class="card glass">${rows || '<div class="empty">No category budgets set yet</div>'}</div>`;
   } else if(navSection==='expenses'){
-    const byCat={}; tx.filter(t=>t.kind==='spend').forEach(t=>{byCat[t.category]=(byCat[t.category]||0)+t.amount;});
+    const y=cursor.getFullYear(), m=cursor.getMonth();
+    const spendTx=tx.filter(t=>t.kind==='spend');
+    const byCat={}; spendTx.forEach(t=>{byCat[t.category]=(byCat[t.category]||0)+t.amount;});
     const entries=Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
+
+    let prevSpendTx;
+    if(period==='monthly'){
+      const prevD=new Date(y,m-1,1);
+      prevSpendTx=monthTx(prevD.getFullYear(),prevD.getMonth()).filter(t=>t.kind==='spend');
+    } else {
+      const prevDate=dstr(new Date(cursor.getFullYear(),cursor.getMonth(),cursor.getDate()-1));
+      prevSpendTx=state.transactions.filter(t=>t.date===prevDate && t.kind==='spend');
+    }
+    const prevByCat={}; prevSpendTx.forEach(t=>{prevByCat[t.category]=(prevByCat[t.category]||0)+t.amount;});
+    const prevSpend=prevSpendTx.reduce((s,t)=>s+t.amount,0);
+
+    const txCount=spendTx.length, prevTxCount=prevSpendTx.length;
+    const daysDenom = period==='monthly' ? daysInMonthCount(y,m) : 1;
+    const avgDaily = spend/daysDenom;
+    const prevMonthDate=new Date(y,m-1,1);
+    const prevDaysDenom = period==='monthly' ? daysInMonthCount(prevMonthDate.getFullYear(),prevMonthDate.getMonth()) : 1;
+    const prevAvgDaily = prevSpend/prevDaysDenom;
+    const largest = spendTx.length ? Math.max(...spendTx.map(t=>t.amount)) : 0;
+    const prevLargest = prevSpendTx.length ? Math.max(...prevSpendTx.map(t=>t.amount)) : 0;
+    const catCount = new Set(spendTx.map(t=>t.category)).size;
+    const prevCatCount = new Set(prevSpendTx.map(t=>t.category)).size;
+
+    const last6=(fn)=>{ const out=[]; for(let i=5;i>=0;i--){ const d=new Date(y,m-i,1); out.push(fn(d.getFullYear(),d.getMonth())); } return out; };
+    const totalSpendSeries=last6((yy,mm)=>sumKind(monthTx(yy,mm),'spend'));
+    const txCountSeries=last6((yy,mm)=>monthTx(yy,mm).filter(t=>t.kind==='spend').length);
+    const avgDailySeries=last6((yy,mm)=>sumKind(monthTx(yy,mm),'spend')/daysInMonthCount(yy,mm));
+    const largestSeries=last6((yy,mm)=>{const s=monthTx(yy,mm).filter(t=>t.kind==='spend').map(t=>t.amount); return s.length?Math.max(...s):0;});
+    const catCountSeries=last6((yy,mm)=>new Set(monthTx(yy,mm).filter(t=>t.kind==='spend').map(t=>t.category)).size);
+
+    const proj=projectedMonthEnd(y,m);
+    const dailyVals=dailySpendSeries(y,m);
+    const peakVal=dailyVals.length?Math.max(...dailyVals):0;
+    const peakDay=dailyVals.indexOf(peakVal)+1;
+    const avgPerDayThisMonth=dailyVals.length?dailyVals.reduce((a,b)=>a+b,0)/dailyVals.length:0;
+
     const legend = entries.length ? entries.map(([cid,val])=>{
       const c=catById(cid);
       return `<div class="row"><span class="dot" style="background:${c.color}"></span><span class="name">${c.name}</span><span class="amt">${fmt(val)}</span></div>`;
     }).join('') : '<div class="empty">No expenses yet</div>';
+
+    const insights=expenseInsights(spend,prevSpend,byCat,prevByCat);
+    const insightsHTML=insights.map(i=>`<div class="insight-row"><span class="em">${i.em}</span><span>${i.html}</span></div>`).join('');
+
     el.innerHTML=`
-      <div class="hero"><div class="big left amt">${fmt(spend)}</div><div class="note">spent this ${period==='monthly'?'month':'day'}</div></div>
-      <div class="donut-row">
-        ${donutSVG(entries,spend,150)}
-        <div class="legend">${legend}</div>
+      <div class="dash-title">Expenses</div>
+      <div class="dash-sub">${period==='monthly' ? new Date(y,m,1).toLocaleDateString(undefined,{month:'long',year:'numeric'}) : cursor.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'})}</div>
+
+      <div class="kpi-row">
+        ${expenseKpiCard('Total Spend',spend,prevSpend,'var(--spend)',totalSpendSeries,{badWhenUp:true})}
+        ${expenseKpiCard('Transactions',txCount,prevTxCount,'var(--ink)',txCountSeries,{formatFn:v=>Math.round(v).toLocaleString(),badWhenUp:null})}
+        ${expenseKpiCard('Avg Daily Spend',avgDaily,prevAvgDaily,'var(--warn)',avgDailySeries,{badWhenUp:true})}
+        ${expenseKpiCard('Largest Expense',largest,prevLargest,'var(--spend)',largestSeries,{badWhenUp:true})}
+        ${expenseKpiCard('Categories',catCount,prevCatCount,'var(--ink)',catCountSeries,{formatFn:v=>Math.round(v).toLocaleString(),badWhenUp:null})}
       </div>
-      <div class="footer-stats">
-        <div class="stat"><h3>All categories</h3><div class="v amt">${fmt(spend)}</div><div class="s">${tx.filter(t=>t.kind==='spend').length} expenses</div></div>
-      </div>`;
+
+      <div class="card glass" style="margin-bottom:16px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:2px">
+          <div><h3 style="margin-bottom:2px">Spending Trend</h3><div class="sub" style="margin:0">Daily spend this month · peak day ${dailyVals.length?monthDayLabel(y,m,peakDay):'—'} (${fmt(peakVal)})</div></div>
+          ${proj ? `<div style="font-size:12px;color:var(--ink-dim)">Projected month-end: <b class="amt" style="color:var(--ink)">${fmt(proj.value)}</b></div>` : ''}
+        </div>
+        ${expenseTrendChartSVG(y,m)}
+        <div style="display:flex;gap:16px;margin-top:8px;font-size:11px;color:var(--ink-dim);flex-wrap:wrap">
+          <span><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--spend);margin-right:5px"></i>Daily spend</span>
+          <span><i style="display:inline-block;width:14px;height:2px;background:var(--ink-dim);margin-right:5px;vertical-align:middle"></i>Average (${fmt(avgPerDayThisMonth)}/day)</span>
+          ${state.categories.some(c=>c.budget) ? `<span><i style="display:inline-block;width:14px;height:2px;background:var(--warn);margin-right:5px;vertical-align:middle"></i>Budget pace</span>` : ''}
+          <span><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--warn);margin-right:5px"></i>Peak day</span>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="card glass">
+          <h3>Category Breakdown</h3><div class="sub">${period==='monthly'?'This month':'Today'} · ${entries.length} categor${entries.length===1?'y':'ies'}</div>
+          <div class="donut-row">
+            ${donutSVG(entries,spend,140)}
+            <div class="legend">${legend}</div>
+          </div>
+        </div>
+        <div class="card glass">
+          <h3>Top Categories</h3><div class="sub">Ranked by spend · vs last ${period==='monthly'?'month':'day'}</div>
+          ${entries.length ? topCategoryBars(entries,spend,prevByCat) : '<div class="empty">No expenses yet</div>'}
+        </div>
+      </div>
+
+      <div class="card glass" style="margin-bottom:16px">
+        <h3>Expense Insights</h3><div class="sub">Automated patterns from this ${period==='monthly'?'month':'day'}'s activity</div>
+        <div class="insights">${insightsHTML}</div>
+      </div>
+
+      ${renderExpenseTable(spendTx)}`;
+
+    const searchEl=document.getElementById('expTableSearch');
+    if(searchEl) searchEl.addEventListener('input',e=>{
+      expTableQuery=e.target.value; renderLeft();
+      const el2=document.getElementById('expTableSearch');
+      if(el2){ el2.focus(); el2.setSelectionRange(el2.value.length,el2.value.length); }
+    });
+    el.querySelectorAll('.exp-table th[data-sort]').forEach(th=>th.addEventListener('click',()=>{
+      const k=th.dataset.sort;
+      if(expTableSort.key===k) expTableSort.dir = expTableSort.dir==='asc'?'desc':'asc';
+      else expTableSort={key:k,dir:'desc'};
+      renderLeft();
+    }));
+    el.querySelectorAll('.exp-table tbody tr[data-id]').forEach(tr=>tr.addEventListener('click',()=>openDetail(tr.dataset.id)));
   } else if(navSection==='incomes'){
     renderIncomeDashboard(el);
   } else if(navSection==='categories'){
