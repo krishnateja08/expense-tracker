@@ -1492,6 +1492,64 @@ function generateInsights(y,m,income,spend){
   if(!out.length) out.push({em:'✅',html:'No notable changes detected this month — spending looks steady'});
   return out.slice(0,5);
 }
+/* ---------- Actionable intelligence: attention, drivers, risk, coach ---------- */
+function computeAttentionItems(income,spend,pInc,pSpend,net,budgeted,byCatNow){
+  const items=[];
+  budgeted.forEach(c=>{
+    const used=byCatNow[c.id]||0;
+    if(c.budget>0 && used>c.budget){
+      items.push({lvl:'bad',em:'⚠️',html:`<b>${c.name}</b> exceeded budget by <b>${Math.round((used/c.budget-1)*100)}%</b>`});
+    }
+  });
+  if(pSpend>0){
+    const chg=(spend-pSpend)/pSpend*100;
+    if(chg>=15) items.push({lvl:'warn',em:'⚠️',html:`Spending increased <b>${Math.round(chg)}%</b> vs last month`});
+    else if(chg<=-15) items.push({lvl:'ok',em:'✅',html:`Spending decreased <b>${Math.abs(Math.round(chg))}%</b> vs last month`});
+  }
+  if(net<0) items.push({lvl:'bad',em:'⚠️',html:'Net savings are <b>negative</b> this month'});
+  if(pInc>0){
+    const incChg=(income-pInc)/pInc;
+    if(Math.abs(incChg)<0.1) items.push({lvl:'ok',em:'✅',html:'Income remains stable'});
+    else if(incChg<0) items.push({lvl:'warn',em:'⚠️',html:`Income dropped <b>${Math.abs(Math.round(incChg*100))}%</b> vs last month`});
+  }
+  if(!items.length) items.push({lvl:'ok',em:'✅',html:'Nothing urgent — spending and budgets look on track'});
+  const order={bad:0,warn:1,ok:2};
+  return items.sort((a,b)=>order[a.lvl]-order[b.lvl]).slice(0,6);
+}
+function computeBudgetRisk(y,m,budgeted,byCatNow){
+  const today=new Date(), daysInMonth=new Date(y,m+1,0).getDate();
+  const isCurrent = y===today.getFullYear() && m===today.getMonth();
+  const dayOfMonth = isCurrent ? Math.max(1,today.getDate()) : daysInMonth;
+  let projectedTotal=0, budgetTotal=0, overspend=0;
+  const rows=budgeted.map(c=>{
+    const used=byCatNow[c.id]||0;
+    const projected = isCurrent ? (used/dayOfMonth)*daysInMonth : used;
+    const pct=c.budget>0?Math.round(used/c.budget*100):0;
+    projectedTotal+=projected; budgetTotal+=c.budget;
+    overspend += Math.max(0,projected-c.budget);
+    return {c,used,pct,projected,over:Math.max(0,used-c.budget)};
+  }).filter(r=>r.pct>=90).sort((a,b)=>b.pct-a.pct).slice(0,5);
+  const riskLevel = budgetTotal<=0 ? 'Low' : projectedTotal>budgetTotal*1.15 ? 'High' : projectedTotal>budgetTotal ? 'Medium' : 'Low';
+  return {rows,overspend,riskLevel};
+}
+function computeFinancialCoachTips(spend,entries,budgeted,byCatNow,net){
+  const tips=[];
+  if(entries.length){
+    const [topId,topVal]=entries[0];
+    const top=catById(topId);
+    const cut15=topVal*0.15;
+    if(cut15>=1) tips.push(`Reducing <b>${top.name}</b> by 15% would save approximately <b>${fmt(cut15)}/month</b>.`);
+  }
+  if(net<0) tips.push(`Reducing discretionary spending by <b>${fmt(Math.abs(net))}</b> would restore positive savings this month.`);
+  budgeted.forEach(c=>{
+    const used=byCatNow[c.id]||0;
+    if(c.budget>0 && used>c.budget*1.2){
+      tips.push(`<b>${c.name}</b> spending exceeds the recommended budget by <b>${Math.round((used/c.budget-1)*100)}%</b>.`);
+    }
+  });
+  if(!tips.length) tips.push('Spending is tracking within budget — keep it up and consider increasing your savings rate.');
+  return tips.slice(0,4);
+}
 function monthlyStory(y,m,income,spend){
   const prev=new Date(y,m-1,1); const pS=sumKind(monthTx(prev.getFullYear(),prev.getMonth()),'spend');
   const byCat={}; monthTx(y,m).filter(t=>t.kind==='spend').forEach(t=>byCat[t.category]=(byCat[t.category]||0)+t.amount);
@@ -1866,6 +1924,38 @@ function renderLeft(){
         <div class="budget-track"><div class="budget-fill ${cls}" style="width:${Math.min(100,pct)}%"></div></div></div>`;
     }).join('');
 
+    /* Actionable intelligence: attention, drivers, upcoming bills, budget risk, coach */
+    const attention=computeAttentionItems(income,spend,pInc,pSpend,net,budgeted,byCatNow);
+    const attentionHTML=attention.map(a=>`<div class="risk-card ${a.lvl}">${a.em} <span>${a.html}</span></div>`).join('');
+
+    const driverTotal=entries.slice(0,4).reduce((s,[,v])=>s+v,0);
+    const driverRows2=entries.slice(0,4).map(([cid,val])=>{
+      const c=catById(cid), pct=spend?Math.round(val/spend*100):0;
+      return `<div class="budget-row"><div class="bh"><span class="n"><span class="dot" style="background:${c.color};display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px"></span>${c.name}</span><span class="v">${fmt(val)} · ${pct}%</span></div>
+        <div class="budget-track"><div class="budget-fill" style="width:${Math.min(100,pct)}%;background:${c.color}"></div></div></div>`;
+    }).join('');
+    const driverNames=entries.slice(0,2).map(([cid])=>catById(cid).name).join(' and ');
+    const driverPct=spend?Math.round(driverTotal/spend*100):0;
+    const driversSummary = entries.length ? `<b>${driverNames}</b> account for <b>${driverPct}%</b> of all spending this ${period==='monthly'?'month':'day'}.` : 'No spending recorded yet.';
+
+    const upc=upcomingExpenses();
+    const upcHTML = upc.length ? upc.slice(0,6).map(({t,date})=>{ const c=catById(t.category);
+      const overdue = date < new Date(new Date().setHours(0,0,0,0));
+      return `<div class="upc-row"><span class="uicon">${c.icon||'📅'}</span>
+        <span class="un">${t.note||c.name}<span class="ud" style="${overdue?'color:var(--spend)':''}">${overdue?'Overdue · ':''}${date.toLocaleDateString(undefined,{month:'short',day:'numeric'})} · ${c.name}</span></span>
+        <span class="uv">${fmt(t.amount)}</span></div>`; }).join('') : '<div class="empty">No upcoming recurring expenses set</div>';
+
+    const budgetRisk=computeBudgetRisk(y,m,budgeted,byCatNow);
+    const riskColor = budgetRisk.riskLevel==='High'?'var(--spend)':budgetRisk.riskLevel==='Medium'?'var(--warn)':'var(--income)';
+    const riskRowsHTML = budgetRisk.rows.length ? budgetRisk.rows.map(r=>`
+      <div class="budget-row"><div class="bh"><span class="n">${r.c.icon||''} ${r.c.name}</span><span class="v" style="color:${r.pct>=100?'var(--spend)':'var(--warn)'}">${r.pct}% ${r.pct>=100?'· Exceeded':'· At risk'}</span></div>
+        <div class="budget-track"><div class="budget-fill ${r.pct>=100?'over':'warn'}" style="width:${Math.min(100,r.pct)}%"></div></div>
+        ${r.over>0?`<div style="font-size:11px;color:var(--ink-dim);margin-top:3px">+${fmt(r.over)} over</div>`:''}</div>`).join('')
+      : '<div class="empty">No categories at risk this month</div>';
+
+    const coachTips=computeFinancialCoachTips(spend,entries,budgeted,byCatNow,net);
+    const coachHTML=coachTips.map(t=>`<div class="insight-row"><span class="em">💡</span><span>${t}</span></div>`).join('');
+
     el.innerHTML=`
       <div class="dash-title">Financial Dashboard</div>
       <div class="dash-sub">${new Date(y,m,1).toLocaleDateString(undefined,{month:'long',year:'numeric'})} overview</div>
@@ -1884,6 +1974,11 @@ function renderLeft(){
 
       <div class="story-card glass"><h3>Monthly Story</h3><p>${monthlyStory(y,m,income,spend)}</p></div>
 
+      <div class="card glass" style="margin-bottom:16px">
+        <h3>What Needs Attention</h3><div class="sub">Quick executive summary</div>
+        ${attentionHTML}
+      </div>
+
       <div class="grid2">
         <div class="card glass">
           <h3>Net Worth Trend</h3><div class="sub">Last 12 months</div>
@@ -1898,6 +1993,12 @@ function renderLeft(){
         </div>
       </div>
 
+      <div class="card glass" style="margin-bottom:16px">
+        <h3>Spending Drivers</h3><div class="sub">Why spending was high this ${period==='monthly'?'month':'day'}</div>
+        ${driverRows2 || '<div class="empty">No expenses yet</div>'}
+        ${entries.length?`<div style="margin-top:6px;padding-top:12px;border-top:1px solid var(--line);font-size:13px;color:var(--ink-dim)">${driversSummary}</div>`:''}
+      </div>
+
       <div class="grid2">
         <div class="card glass">
           <h3>Smart Insights</h3><div class="sub">Automated patterns from your activity</div>
@@ -1906,6 +2007,18 @@ function renderLeft(){
         <div class="card glass">
           <h3>Budget Tracker</h3><div class="sub">This ${period==='monthly'?'month':'day'}'s category limits</div>
           ${budgetRows || '<div class="empty">No budgets set. Add limits in Categories.</div>'}
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="card glass">
+          <h3>Upcoming Bills</h3><div class="sub">Next recurring charges due</div>
+          ${upcHTML}
+        </div>
+        <div class="card glass">
+          <h3>Budget Risk</h3><div class="sub">Categories tracking over budget <span style="color:${riskColor};font-weight:700">· ${budgetRisk.riskLevel} risk</span></div>
+          ${riskRowsHTML}
+          ${budgetRisk.overspend>0?`<div style="margin-top:10px;padding-top:12px;border-top:1px solid var(--line);font-size:12.5px;display:flex;justify-content:space-between"><span style="color:var(--ink-dim)">Expected month-end overspend</span><b style="color:var(--spend)">${fmt(budgetRisk.overspend)}</b></div>`:''}
         </div>
       </div>
 
@@ -1920,6 +2033,11 @@ function renderLeft(){
             <div class="hf">Expense Stability <b>${Math.round(health.stability*100)}%</b></div>
           </div>
         </div>
+      </div>
+
+      <div class="card glass" style="margin-bottom:16px">
+        <h3>Financial Coach</h3><div class="sub">Recommendations based on your actual data</div>
+        ${coachHTML}
       </div>`;
   } else if(navSection==='budgets'){
     const y=cursor.getFullYear(), m=cursor.getMonth();
