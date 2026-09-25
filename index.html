@@ -140,6 +140,25 @@
     font-size:12px;font-weight:700;cursor:pointer;opacity:.55;}
   .chip-picker .cchip.selected{opacity:1;}
   .chip-picker .cchip.addnew{background:var(--panel2);color:var(--ink-dim);border:1px dashed var(--line);opacity:1;}
+
+  /* Combobox (fuzzy-search) fields for category & tags */
+  .combo-wrap{position:relative;cursor:text;flex-wrap:wrap;}
+  .combo-input{flex:1;min-width:60px;background:none;border:none;color:var(--ink);font-size:14px;outline:none;padding:0;}
+  .combo-input::placeholder{color:var(--ink-dim);}
+  .combo-dropdown{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:20;background:var(--panel2);
+    border:1px solid var(--line);border-radius:10px;max-height:220px;overflow-y:auto;box-shadow:var(--shadow);padding:4px;}
+  .combo-opt{display:flex;align-items:center;gap:9px;width:100%;background:none;border:none;color:var(--ink);
+    font-size:13px;padding:9px 10px;border-radius:7px;cursor:pointer;text-align:left;}
+  .combo-opt:hover{background:var(--panel);}
+  .combo-opt .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+  .combo-opt.addnew{color:var(--accent);font-weight:600;border-top:1px solid var(--line);margin-top:2px;padding-top:10px;}
+  .combo-empty{color:var(--ink-dim);font-size:12px;padding:10px;text-align:center;}
+  .tag-input-wrap{flex-wrap:wrap;row-gap:6px;}
+  .tag-chips-inline{display:flex;flex-wrap:wrap;gap:6px;}
+  .tag-chip{display:inline-flex;align-items:center;gap:6px;background:var(--accent);color:#fff;border-radius:20px;
+    padding:5px 6px 5px 12px;font-size:12px;font-weight:700;}
+  .tag-chip .tag-x{background:rgba(255,255,255,.25);border:none;color:#fff;width:16px;height:16px;border-radius:50%;
+    font-size:11px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;}
   .showmore-toggle{width:100%;background:none;border:none;color:var(--ink-dim);font-size:12px;font-weight:700;
     letter-spacing:.3px;padding:14px 0 4px;cursor:pointer;text-align:center;}
   .list{flex:1;overflow:auto;padding:6px 84px 84px 20px;}
@@ -1119,11 +1138,11 @@
         <span class="cur" id="currencyToggle" style="cursor:pointer">$</span>
       </div>
 
-      <div class="picker-field" id="categoryField"><span class="ic">◎</span><span id="categoryLabel" class="ph">Category</span></div>
-      <div class="chip-picker" id="categoryChips" style="display:none"></div>
+      <div class="picker-field combo-wrap" id="categoryField"><span class="ic">◎</span><input type="text" id="categoryInput" class="combo-input" placeholder="Category" autocomplete="off"></div>
+      <div class="combo-dropdown" id="categoryDropdown" style="display:none"></div>
 
-      <div class="picker-field" id="tagsField"><span class="ic">#</span><span id="tagsLabel" class="ph">Tags</span></div>
-      <div class="chip-picker" id="tagChips" style="display:none"></div>
+      <div class="picker-field combo-wrap tag-input-wrap" id="tagsField"><span class="ic">#</span><div class="tag-chips-inline" id="tagChipsInline"></div><input type="text" id="tagsInput" class="combo-input" placeholder="Tags" autocomplete="off"></div>
+      <div class="combo-dropdown" id="tagsDropdown" style="display:none"></div>
 
       <div class="picker-field" id="accountField"><span class="ic">⛁</span><span id="accountLabel">Cash</span></div>
       <div class="chip-picker" id="accountChips" style="display:none"></div>
@@ -3093,22 +3112,88 @@ let modalKind='spend';
 let selectedCategory=null, selectedTags=new Set(), selectedAccount='Cash';
 
 function closeAllPickers(){
-  document.getElementById('categoryChips').style.display='none';
-  document.getElementById('tagChips').style.display='none';
+  document.getElementById('categoryDropdown').style.display='none';
+  document.getElementById('tagsDropdown').style.display='none';
   document.getElementById('accountChips').style.display='none';
 }
 
-function renderCategoryChips(){
-  const el=document.getElementById('categoryChips');
-  el.innerHTML=state.categories.map(c=>
-    `<button class="cchip ${selectedCategory===c.id?'selected':''}" data-id="${c.id}" style="background:${c.color}">${c.name}</button>`
-  ).join('');
-  el.querySelectorAll('.cchip').forEach(btn=>btn.addEventListener('click',()=>{
-    selectedCategory=btn.dataset.id;
-    document.getElementById('categoryLabel').textContent=catById(selectedCategory).name;
-    document.getElementById('categoryLabel').classList.remove('ph');
-    closeAllPickers();
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
+/* Fuzzy matching: prioritizes prefix > substring > in-order subsequence,
+   so a typo-y or partial query like "entr" or "etm" still finds "Entertainment". */
+function fuzzyScore(query,target){
+  query=String(query).toLowerCase().trim(); target=String(target).toLowerCase();
+  if(!query) return 0;
+  if(target===query) return 10000;
+  if(target.startsWith(query)) return 1000-target.length;
+  const idx=target.indexOf(query);
+  if(idx!==-1) return 500-idx;
+  let qi=0,score=0,lastMatch=-1;
+  for(let ti=0;ti<target.length && qi<query.length;ti++){
+    if(target[ti]===query[qi]){
+      score += (lastMatch===ti-1) ? 3 : 1;
+      lastMatch=ti; qi++;
+    }
+  }
+  return qi===query.length ? score : -1;
+}
+function fuzzyFilter(query,items,keyFn){
+  keyFn = keyFn || (x=>x);
+  if(!query) return items;
+  return items.map(item=>({item,score:fuzzyScore(query,keyFn(item))}))
+    .filter(r=>r.score>=0).sort((a,b)=>b.score-a.score).map(r=>r.item);
+}
+
+function selectCategoryById(id){
+  selectedCategory=id;
+  const c=catById(id);
+  const input=document.getElementById('categoryInput');
+  input.value=c.name;
+  closeAllPickers();
+  renderTagChipsInline(); // tag suggestions depend on category, but chips themselves don't change
+}
+
+function renderCategoryDropdown(query){
+  const el=document.getElementById('categoryDropdown');
+  const q=(query||'').trim();
+  const matches=fuzzyFilter(q,state.categories,c=>c.name);
+  const exact=state.categories.find(c=>c.name.toLowerCase()===q.toLowerCase());
+  let html='';
+  if(matches.length){
+    html+=matches.map(c=>
+      `<button type="button" class="combo-opt" data-id="${c.id}"><span class="dot" style="background:${c.color}"></span>${escapeHtml(c.name)}</button>`
+    ).join('');
+  } else if(!q){
+    html=`<div class="combo-empty">No categories yet — type to create one</div>`;
+  }
+  if(q && !exact){
+    html+=`<button type="button" class="combo-opt addnew" id="categoryAddNew">+ Add "${escapeHtml(q)}" as new category</button>`;
+  }
+  el.innerHTML = html || `<div class="combo-empty">No matches</div>`;
+  el.style.display='block';
+  el.querySelectorAll('.combo-opt[data-id]').forEach(btn=>btn.addEventListener('mousedown',e=>{
+    e.preventDefault(); selectCategoryById(btn.dataset.id);
   }));
+  const addBtn=document.getElementById('categoryAddNew');
+  if(addBtn) addBtn.addEventListener('mousedown',e=>{
+    e.preventDefault();
+    const id=findOrCreateCategory(q); persist(); selectCategoryById(id);
+  });
+}
+
+/* Commit whatever's typed in the category box even if the person never
+   explicitly picked a suggestion — typing a name and moving on is enough. */
+function commitCategoryInput(){
+  const input=document.getElementById('categoryInput');
+  const q=input.value.trim();
+  if(!q){ selectedCategory=null; return; }
+  if(selectedCategory && catById(selectedCategory).name.toLowerCase()===q.toLowerCase()) return;
+  const exact=state.categories.find(c=>c.name.toLowerCase()===q.toLowerCase());
+  const id = exact ? exact.id : (()=>{ const nid=findOrCreateCategory(q); persist(); return nid; })();
+  selectedCategory=id;
+  input.value=catById(id).name;
 }
 
 function frequentTagsFor(categoryId){
@@ -3117,27 +3202,67 @@ function frequentTagsFor(categoryId){
     if(categoryId && t.category!==categoryId) return;
     (t.tags||[]).forEach(tag=>{ freq[tag]=(freq[tag]||0)+1; });
   });
-  return Object.entries(freq).sort((a,b)=>b[1]-a[1]).map(([tag])=>tag).slice(0,14);
+  return Object.entries(freq).sort((a,b)=>b[1]-a[1]).map(([tag])=>tag);
 }
 
-function renderTagChips(){
-  const el=document.getElementById('tagChips');
-  const tags=frequentTagsFor(selectedCategory);
-  el.innerHTML = tags.length ? tags.map(tag=>
-    `<button class="cchip ${selectedTags.has(tag)?'selected':''}" data-tag="${tag}">${tag}</button>`
-  ).join('') : `<span style="color:var(--ink-dim);font-size:12px;padding:6px 2px">No tags used yet for this category</span>`;
-  el.querySelectorAll('.cchip[data-tag]').forEach(btn=>btn.addEventListener('click',()=>{
-    const tag=btn.dataset.tag;
-    if(selectedTags.has(tag)) selectedTags.delete(tag); else selectedTags.add(tag);
+function renderTagChipsInline(){
+  const wrap=document.getElementById('tagChipsInline');
+  wrap.innerHTML=[...selectedTags].map(tag=>
+    `<span class="tag-chip">${escapeHtml(tag)}<button type="button" class="tag-x" data-tag="${escapeHtml(tag)}">×</button></span>`
+  ).join('');
+  wrap.querySelectorAll('.tag-x').forEach(btn=>btn.addEventListener('click',e=>{
+    e.stopPropagation();
+    selectedTags.delete(btn.dataset.tag);
     updateTagsLabel();
-    btn.classList.toggle('selected');
+    document.getElementById('tagsInput').focus();
   }));
 }
 
+function addTag(tag){
+  tag=String(tag).trim(); if(!tag) return;
+  selectedTags.add(tag);
+  updateTagsLabel();
+  const input=document.getElementById('tagsInput');
+  input.value='';
+  renderTagsDropdown('');
+}
+
+function renderTagsDropdown(query){
+  const el=document.getElementById('tagsDropdown');
+  const q=(query||'').trim();
+  const pool=[...new Set([...frequentTagsFor(selectedCategory),...frequentTagsFor(null)])]
+    .filter(t=>!selectedTags.has(t));
+  const matches=fuzzyFilter(q,pool,t=>t);
+  const exact=pool.find(t=>t.toLowerCase()===q.toLowerCase());
+  let html='';
+  if(matches.length){
+    html+=matches.map(t=>`<button type="button" class="combo-opt" data-tag="${escapeHtml(t)}">#${escapeHtml(t)}</button>`).join('');
+  } else if(!q){
+    html=`<div class="combo-empty">No tags yet — type to create one</div>`;
+  }
+  if(q && !exact){
+    html+=`<button type="button" class="combo-opt addnew" id="tagAddNew">+ Add "${escapeHtml(q)}" as a tag</button>`;
+  }
+  el.innerHTML = html || `<div class="combo-empty">No matches</div>`;
+  el.style.display='block';
+  el.querySelectorAll('.combo-opt[data-tag]').forEach(btn=>btn.addEventListener('mousedown',e=>{
+    e.preventDefault(); addTag(btn.dataset.tag);
+  }));
+  const addBtn=document.getElementById('tagAddNew');
+  if(addBtn) addBtn.addEventListener('mousedown',e=>{ e.preventDefault(); addTag(q); });
+}
+
+/* Commit any text still sitting in the tag box (not yet turned into a chip)
+   when the sheet is saved, so a forgotten Enter press doesn't drop a tag. */
+function commitTagsInput(){
+  const input=document.getElementById('tagsInput');
+  const q=input.value.trim();
+  if(q){ selectedTags.add(q); input.value=''; }
+}
+
 function updateTagsLabel(){
-  const lbl=document.getElementById('tagsLabel');
-  if(selectedTags.size===0){ lbl.textContent='Tags'; lbl.classList.add('ph'); }
-  else { lbl.textContent=[...selectedTags].join(', '); lbl.classList.remove('ph'); }
+  renderTagChipsInline();
+  document.getElementById('tagsInput').placeholder = selectedTags.size ? '' : 'Tags';
 }
 
 function renderAccountChips(){
@@ -3162,18 +3287,33 @@ function renderAccountChips(){
   });
 }
 
-document.getElementById('categoryField').addEventListener('click',()=>{
-  const chips=document.getElementById('categoryChips');
-  const opening=chips.style.display==='none';
-  closeAllPickers();
-  if(opening){ renderCategoryChips(); chips.style.display='flex'; }
+const categoryInputEl=document.getElementById('categoryInput');
+document.getElementById('categoryField').addEventListener('click',e=>{ if(e.target!==categoryInputEl) categoryInputEl.focus(); });
+categoryInputEl.addEventListener('focus',()=>renderCategoryDropdown(categoryInputEl.value.trim()));
+categoryInputEl.addEventListener('input',()=>{ selectedCategory=null; renderCategoryDropdown(categoryInputEl.value.trim()); });
+categoryInputEl.addEventListener('keydown',e=>{
+  if(e.key==='Enter'){ e.preventDefault(); commitCategoryInput(); closeAllPickers(); categoryInputEl.blur(); }
+  else if(e.key==='Escape'){ closeAllPickers(); categoryInputEl.blur(); }
 });
-document.getElementById('tagsField').addEventListener('click',()=>{
-  const chips=document.getElementById('tagChips');
-  const opening=chips.style.display==='none';
-  closeAllPickers();
-  if(opening){ renderTagChips(); chips.style.display='flex'; }
+categoryInputEl.addEventListener('blur',()=>{
+  setTimeout(()=>{ if(document.activeElement!==categoryInputEl){ commitCategoryInput(); closeAllPickers(); } },150);
 });
+
+const tagsInputEl=document.getElementById('tagsInput');
+document.getElementById('tagsField').addEventListener('click',e=>{ if(e.target!==tagsInputEl) tagsInputEl.focus(); });
+tagsInputEl.addEventListener('focus',()=>renderTagsDropdown(tagsInputEl.value.trim()));
+tagsInputEl.addEventListener('input',()=>renderTagsDropdown(tagsInputEl.value.trim()));
+tagsInputEl.addEventListener('keydown',e=>{
+  if(e.key==='Enter'||e.key===','){ e.preventDefault(); const q=tagsInputEl.value.trim(); if(q) addTag(q); }
+  else if(e.key==='Backspace' && !tagsInputEl.value){
+    const last=[...selectedTags].pop();
+    if(last){ selectedTags.delete(last); updateTagsLabel(); renderTagsDropdown(''); }
+  } else if(e.key==='Escape'){ closeAllPickers(); tagsInputEl.blur(); }
+});
+tagsInputEl.addEventListener('blur',()=>{
+  setTimeout(()=>{ if(document.activeElement!==tagsInputEl) closeAllPickers(); },150);
+});
+
 document.getElementById('accountField').addEventListener('click',()=>{
   const chips=document.getElementById('accountChips');
   const opening=chips.style.display==='none';
@@ -3204,13 +3344,13 @@ function resetSheetFields(){
 
 function openAddSheet(){
   editingId=null;
-  document.getElementById('sheetHeading').textContent='Add expense';
   document.getElementById('fAmount').value='';
   document.getElementById('fNote').value='';
   document.getElementById('fDate').value=ymd(new Date());
   setEntryCurrency(entryCurrency);
   selectedCategory=null; selectedTags=new Set(); selectedAccount=state.accounts[0]||'Cash';
-  document.getElementById('categoryLabel').textContent='Category'; document.getElementById('categoryLabel').classList.add('ph');
+  document.getElementById('categoryInput').value='';
+  document.getElementById('tagsInput').value='';
   document.getElementById('accountLabel').textContent=selectedAccount;
   updateTagsLabel();
   resetSheetFields();
@@ -3219,14 +3359,14 @@ function openAddSheet(){
 }
 function openEditSheet(t){
   editingId=t.id;
-  document.getElementById('sheetHeading').textContent='Edit expense';
   const wasInr=t.origCurrency==='INR';
   document.getElementById('fAmount').value=wasInr?t.origAmount:t.amount;
   document.getElementById('fNote').value=t.note||'';
   document.getElementById('fDate').value=t.date;
   setEntryCurrency(wasInr?'INR':'USD');
   selectedCategory=t.category; selectedTags=new Set(t.tags||[]); selectedAccount=t.account||state.accounts[0]||'Cash';
-  document.getElementById('categoryLabel').textContent=catById(selectedCategory).name; document.getElementById('categoryLabel').classList.remove('ph');
+  document.getElementById('categoryInput').value=catById(selectedCategory).name;
+  document.getElementById('tagsInput').value='';
   document.getElementById('accountLabel').textContent=selectedAccount;
   updateTagsLabel();
   resetSheetFields();
@@ -3240,6 +3380,8 @@ function setModalKind(k){
   modalKind=k;
   document.getElementById('kindSpend').classList.toggle('active',k==='spend');
   document.getElementById('kindIncome').classList.toggle('active',k==='income');
+  const verb = editingId!==null ? 'Edit' : 'Add';
+  document.getElementById('sheetHeading').textContent = `${verb} ${k==='income'?'income':'expense'}`;
 }
 const fabWrap=document.getElementById('fabWrap');
 document.getElementById('fabAdd').addEventListener('click',()=>fabWrap.classList.toggle('open'));
@@ -3258,6 +3400,8 @@ document.getElementById('kindIncome').addEventListener('click',()=>setModalKind(
 document.getElementById('saveBtn').addEventListener('click',async ()=>{
   const entered=parseFloat(document.getElementById('fAmount').value);
   if(!entered||entered<=0) return;
+  commitCategoryInput();
+  commitTagsInput();
   const category=selectedCategory || 'other';
   const note=document.getElementById('fNote').value.trim();
   const tags=[...selectedTags];
