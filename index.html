@@ -700,10 +700,46 @@
   .yr-bar-col .yl{font-size:11px;color:var(--ink-dim);margin-top:8px;}
   .yr-bar-col .yv{font-size:11.5px;font-weight:700;margin-bottom:6px;}
 
-  .heat-grid{display:grid;grid-template-columns:auto repeat(7,1fr);gap:4px;align-items:center;}
-  .heat-grid .hlbl{font-size:11px;color:var(--ink-dim);padding-right:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px;}
-  .heat-grid .hday{font-size:10px;color:var(--ink-dim);text-align:center;padding-bottom:4px;}
-  .heat-cell{aspect-ratio:1;border-radius:5px;background:var(--panel2);}
+  /* Category Leaderboard report */
+  .lb-row{display:flex;align-items:center;gap:14px;padding:14px 10px;border-bottom:1px solid var(--line);position:relative;}
+  .lb-row:last-child{border-bottom:none;}
+  .lb-row.rank1{background:linear-gradient(90deg,rgba(255,45,122,.10),transparent);border:1px solid rgba(255,45,122,.35);
+    border-radius:12px;margin-bottom:6px;padding:16px 14px;}
+  .lb-rank{width:34px;flex-shrink:0;text-align:center;font-size:15px;font-weight:800;color:var(--ink-dim);}
+  .lb-rank.medal{font-size:20px;}
+  .lb-icon{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;
+    font-size:18px;flex-shrink:0;background:var(--panel2);}
+  .lb-row.rank1 .lb-icon{width:50px;height:50px;font-size:24px;}
+  .lb-main{flex:1;min-width:0;}
+  .lb-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:6px;}
+  .lb-name{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:8px;}
+  .lb-badge{font-size:9.5px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;padding:2px 8px;border-radius:20px;}
+  .lb-badge.gold{background:rgba(255,45,122,.18);color:var(--accent);}
+  .lb-badge.silver{background:rgba(152,162,179,.18);color:#C9D1DC;}
+  .lb-badge.bronze{background:rgba(217,119,6,.18);color:#E8A25A;}
+  .lb-figs{text-align:right;flex-shrink:0;}
+  .lb-amt{font-weight:800;font-size:14.5px;}
+  .lb-pct{font-size:11px;color:var(--ink-dim);}
+  .lb-bar-track{height:9px;border-radius:99px;background:var(--panel2);overflow:hidden;margin-bottom:6px;}
+  .lb-bar-fill{height:100%;border-radius:99px;}
+  .lb-meta{display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);}
+  .lb-trend{font-weight:700;}
+  .lb-trend.up{color:var(--spend);} .lb-trend.down{color:var(--income);} .lb-trend.flat{color:var(--ink-dim);}
+
+  .cat-cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;}
+  .cat-card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px;}
+  .cat-card .cc-top{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+  .cat-card .cc-icon{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;}
+  .cat-card .cc-name{font-size:12px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .cat-card .cc-amt{font-size:17px;font-weight:800;margin-bottom:2px;}
+  .cat-card .cc-pct{font-size:11px;color:var(--ink-dim);margin-bottom:8px;}
+  .cat-card .cc-foot{display:flex;justify-content:space-between;font-size:10.5px;color:var(--ink-dim);padding-top:8px;border-top:1px solid var(--line);}
+
+  .stat-mini-row{display:flex;justify-content:space-between;align-items:center;padding:11px 2px;border-bottom:1px solid var(--line);font-size:12.5px;}
+  .stat-mini-row:last-child{border-bottom:none;}
+  .stat-mini-row .sn{color:var(--ink-dim);}
+  .stat-mini-row .sv{font-weight:700;display:flex;align-items:center;gap:6px;}
+
 
   .forecast-stat{text-align:center;padding:10px 0;}
   .forecast-stat .fv{font-size:26px;font-weight:800;}
@@ -2342,7 +2378,7 @@ function renderPlanning(el){
 
 /* ---------- Reports module ---------- */
 let repTab='overview';
-const REP_TABS=[['overview','Overview'],['categories','Categories'],['trends','Trends'],['annual','Annual'],['insights','Insights'],['heatmap','Heatmap'],['forecast','Forecast'],['export','Export']];
+const REP_TABS=[['overview','Overview'],['categories','Categories'],['trends','Trends'],['annual','Annual'],['insights','Insights'],['heatmap','Leaderboard'],['forecast','Forecast'],['export','Export']];
 
 function yearTx(y){ return state.transactions.filter(t=>t.date.slice(0,4)===String(y)); }
 function catSpendMap(list){ const m={}; list.filter(t=>t.kind==='spend').forEach(t=>m[t.category]=(m[t.category]||0)+t.amount); return m; }
@@ -2500,15 +2536,136 @@ function renderReports(el){
     body=`<div class="card glass"><h3>AI Financial Insights</h3><div class="sub">Automated read on why spending moved and what to do about it</div>
       <div class="insights">${items.map(i=>`<div class="insight-row"><span class="em">${i.em}</span><span>${i.t}</span></div>`).join('')}</div></div>`;
   } else if(repTab==='heatmap'){
-    const topCats=[...state.categories].sort((a,b)=>(curCat[b.id]||0)-(curCat[a.id]||0)).slice(0,6);
-    const grid={}; let maxV=1;
-    topCats.forEach(c=>{ grid[c.id]=[0,0,0,0,0,0,0];
-      monthTx(y,m).filter(t=>t.kind==='spend'&&t.category===c.id).forEach(t=>{ const dow=new Date(t.date+'T00:00:00').getDay(); grid[c.id][dow]+=t.amount; maxV=Math.max(maxV,grid[c.id][dow]); });
-    });
-    const days=['S','M','T','W','T','F','S'];
-    const rows=topCats.map(c=>`<div class="hlbl">${c.name}</div>${grid[c.id].map(v=>`<div class="heat-cell" style="background:${v?`color-mix(in srgb, ${c.color} ${Math.round(v/maxV*90+10)}%, var(--panel2))`:'var(--panel2)'}" title="${fmt(v)}"></div>`).join('')}`).join('');
-    body=`<div class="card glass"><h3>Spending Heatmap</h3><div class="sub">Intensity by category and day of week, this month</div>
-      <div class="heat-grid"><div></div>${days.map(d=>`<div class="hday">${d}</div>`).join('')}${rows}</div></div>`;
+    const entries=Object.entries(curCat).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+    const total=curSpend;
+    const maxVal=entries.length?entries[0][1]:0;
+    const catCount=entries.length;
+    const prevEntries=Object.entries(prevCat).filter(([,v])=>v>0);
+    const prevCatCount=prevEntries.length;
+    const avgCat = catCount ? total/catCount : 0;
+    const prevAvgCat = prevCatCount ? prevSpend/prevCatCount : 0;
+    const largest = entries[0] || null;
+    const largestShare = total && largest ? largest[1]/total*100 : 0;
+    const prevLargestVal = prevEntries.length ? Math.max(...prevEntries.map(e=>e[1])) : 0;
+    const prevLargestShare = prevSpend ? prevLargestVal/prevSpend*100 : 0;
+    const txCountByCat={}; monthTx(y,m).filter(t=>t.kind==='spend').forEach(t=>{ txCountByCat[t.category]=(txCountByCat[t.category]||0)+1; });
+    const top3Share = total ? entries.slice(0,3).reduce((s,[,v])=>s+v,0)/total*100 : 0;
+    const top5Share = total ? entries.slice(0,5).reduce((s,[,v])=>s+v,0)/total*100 : 0;
+
+    const growthRows = entries.map(([cid,v])=>({cid,v,g:pct(v,prevCat[cid]||0)}));
+    const mostActive = entries.length ? entries.reduce((a,b)=>(txCountByCat[b[0]]||0)>(txCountByCat[a[0]]||0)?b:a) : null;
+    const highestGrowth = growthRows.filter(r=>prevCat[r.cid]>0).sort((a,b)=>b.g-a.g)[0] || null;
+    const lowestSpend = entries.length ? entries[entries.length-1] : null;
+
+    /* --- KPI row --- */
+    const reportKpi=(icon,label,valHTML,trendHTML)=>`<div class="kpi glass">
+      <div class="k-lbl" style="display:flex;align-items:center;gap:6px"><span>${icon}</span>${label}</div>
+      <div class="k-val amt">${valHTML}</div>
+      <div class="k-trend flat" style="color:var(--ink-dim)">${trendHTML}</div></div>`;
+    const catCountDelta = catCount-prevCatCount;
+    const shareDelta = largestShare-prevLargestShare;
+    const gCls=(d)=>Math.abs(d)<0.5?'lb-trend flat':(d>0?'lb-trend up':'lb-trend down');
+    const totalG=pct(total,prevSpend), avgG=pct(avgCat,prevAvgCat);
+    const kpis=`<div class="kpi-row">
+      ${reportKpi('💳','Total Expenses',fmt(total),`<span class="${gCls(totalG)}">${trendArrow(totalG)} ${Math.abs(totalG).toFixed(0)}%</span> vs last month`)}
+      ${reportKpi('🗂️','Total Categories',catCount,`${catCountDelta===0?'→ same as':catCountDelta>0?`↑ +${catCountDelta} vs`:`↓ ${catCountDelta} vs`} last month`)}
+      ${reportKpi(largest?(catById(largest[0]).icon||'📦'):'📦','Largest Category',largest?catById(largest[0]).name:'—',largest?`${fmt(largest[1])} spent`:'No spending yet')}
+      ${reportKpi('🥇','Largest Category Share',largestShare.toFixed(0)+'%',`<span class="${gCls(shareDelta)}">${trendArrow(shareDelta)} ${Math.abs(shareDelta).toFixed(1)} pts</span> vs last month`)}
+      ${reportKpi('📊','Avg Category Spend',fmt(avgCat),`<span class="${gCls(avgG)}">${trendArrow(avgG)} ${Math.abs(avgG).toFixed(0)}%</span> vs last month`)}
+    </div>`;
+
+    /* --- Leaderboard rows --- */
+    const medals=['🥇','🥈','🥉'];
+    const badgeCls=['gold','silver','bronze'];
+    const badgeLbl=['Rank #1','Silver','Bronze'];
+    const lbRows = entries.length ? entries.map(([cid,v],i)=>{
+      const c=catById(cid);
+      const sharePct = total? (v/total*100) : 0;
+      const barPct = maxVal? (v/maxVal*100) : 0;
+      const g=pct(v,prevCat[cid]||0);
+      const gCls = Math.abs(g)<1?'flat':(g>0?'up':'down');
+      const gArrow = Math.abs(g)<1?'→':(g>0?'▲':'▼');
+      const txn=txCountByCat[cid]||0;
+      const isTop3=i<3;
+      return `<div class="lb-row ${i===0?'rank1':''}">
+        <div class="lb-rank ${isTop3?'medal':''}">${isTop3?medals[i]:'#'+(i+1)}</div>
+        <div class="lb-icon" style="background:${c.color}22;color:${c.color}">${c.icon||'📦'}</div>
+        <div class="lb-main">
+          <div class="lb-top">
+            <div class="lb-name">${c.name}${isTop3?`<span class="lb-badge ${badgeCls[i]}">${badgeLbl[i]}</span>`:''}</div>
+            <div class="lb-figs"><div class="lb-amt">${fmt(v)}</div><div class="lb-pct">${sharePct.toFixed(0)}% of total spending</div></div>
+          </div>
+          <div class="lb-bar-track"><div class="lb-bar-fill" style="width:${barPct}%;background:${c.color}"></div></div>
+          <div class="lb-meta">
+            <span>${txn} transaction${txn===1?'':'s'}</span>
+            <span class="lb-trend ${gCls}">${gArrow} ${Math.abs(g).toFixed(0)}% vs last month</span>
+          </div>
+        </div>
+      </div>`;
+    }).join('') : '<div class="empty">No expenses recorded this month yet</div>';
+
+    /* --- Category insights (right panel) --- */
+    const insightItems=[];
+    if(largest) insightItems.push({em:'✅',html:`<b>${catById(largest[0]).name}</b> accounts for <b>${largestShare.toFixed(0)}%</b> of total spending`});
+    if(entries.length>=3) insightItems.push({em:'✅',html:`Top 3 categories represent <b>${top3Share.toFixed(0)}%</b> of spending`});
+    growthRows.filter(r=>prevCat[r.cid]>0 && r.g>=15).sort((a,b)=>b.g-a.g).slice(0,1).forEach(r=>insightItems.push({em:'⚠️',html:`<b>${catById(r.cid).name}</b> increased <b>${r.g.toFixed(0)}%</b> vs last month`}));
+    growthRows.filter(r=>prevCat[r.cid]>0 && r.g<=-10).sort((a,b)=>a.g-b.g).slice(0,1).forEach(r=>insightItems.push({em:'✅',html:`<b>${catById(r.cid).name}</b> spending decreased <b>${Math.abs(r.g).toFixed(0)}%</b>`}));
+    if(catCount) insightItems.push({em:'📊',html:`Average category spend is <b>${fmt(avgCat)}</b> across ${catCount} categor${catCount===1?'y':'ies'}`});
+    if(!insightItems.length) insightItems.push({em:'✅',html:'No spending recorded yet this month'});
+    const insightsHTML=insightItems.slice(0,6).map(i=>`<div class="insight-row"><span class="em">${i.em}</span><span>${i.html}</span></div>`).join('');
+
+    /* --- Additional analytics --- */
+    const top5Rows = entries.slice(0,5).map(([cid,v],i)=>{
+      const c=catById(cid); const sh=total?v/total*100:0;
+      return `<div class="rank-row"><span class="rn">#${i+1}</span><span class="dot" style="width:8px;height:8px;border-radius:50%;background:${c.color};margin-right:2px"></span><span class="cname">${c.name}</span><span class="rv" style="color:var(--ink)">${fmt(v)}</span><span class="rpct">${sh.toFixed(0)}%</span></div>`;
+    }).join('') || '<div class="empty">No data yet</div>';
+
+    const statRows=`
+      <div class="stat-mini-row"><span class="sn">Most Active Category</span><span class="sv">${mostActive?`${catById(mostActive[0]).icon||''} ${catById(mostActive[0]).name} · ${txCountByCat[mostActive[0]]||0} tx`:'—'}</span></div>
+      <div class="stat-mini-row"><span class="sn">Highest Growth Category</span><span class="sv" style="color:var(--spend)">${highestGrowth?`${catById(highestGrowth.cid).name} ▲ ${highestGrowth.g.toFixed(0)}%`:'—'}</span></div>
+      <div class="stat-mini-row"><span class="sn">Lowest Spending Category</span><span class="sv">${lowestSpend?`${catById(lowestSpend[0]).name} · ${fmt(lowestSpend[1])}`:'—'}</span></div>
+      <div class="stat-mini-row"><span class="sn">Top 5 Category Contribution</span><span class="sv">${top5Share.toFixed(0)}% of total</span></div>
+      <div class="stat-mini-row"><span class="sn">Spending Distribution</span><span class="sv">${largestShare>=50?'Highly concentrated':largestShare>=30?'Moderately concentrated':'Broadly spread'}</span></div>`;
+
+    /* --- Category breakdown cards --- */
+    const breakdownCards = entries.length ? entries.map(([cid,v])=>{
+      const c=catById(cid); const sh=total?v/total*100:0; const g=pct(v,prevCat[cid]||0);
+      const gCls=Math.abs(g)<1?'flat':(g>0?'up':'down'); const gArrow=Math.abs(g)<1?'→':(g>0?'▲':'▼');
+      const txn=txCountByCat[cid]||0;
+      return `<div class="cat-card">
+        <div class="cc-top"><div class="cc-icon" style="background:${c.color}22;color:${c.color}">${c.icon||'📦'}</div><div class="cc-name">${c.name}</div></div>
+        <div class="cc-amt">${fmt(v)}</div>
+        <div class="cc-pct">${sh.toFixed(0)}% of spending</div>
+        <div class="cc-foot"><span>${txn} tx</span><span class="lb-trend ${gCls}">${gArrow} ${Math.abs(g).toFixed(0)}%</span></div>
+      </div>`;
+    }).join('') : '<div class="empty">No expenses recorded this month yet</div>';
+
+    body=`
+      ${kpis}
+      <div class="rep-grid2" style="grid-template-columns:1.6fr 1fr;align-items:start">
+        <div class="card glass">
+          <h3>Category Leaderboard</h3><div class="sub">Ranked by spend, ${new Date(y,m,1).toLocaleDateString(undefined,{month:'long',year:'numeric'})}</div>
+          <div style="margin-top:6px">${lbRows}</div>
+        </div>
+        <div>
+          <div class="card glass" style="margin-bottom:14px">
+            <h3>Category Insights</h3><div class="sub">Automated read on spending concentration</div>
+            <div class="insights">${insightsHTML}</div>
+          </div>
+          <div class="card glass">
+            <h3>Additional Analytics</h3><div class="sub">Quick facts about this month's spending</div>
+            ${statRows}
+          </div>
+        </div>
+      </div>
+      <div class="card glass" style="margin-top:16px">
+        <h3>Category Breakdown</h3><div class="sub">Every category, at a glance</div>
+        <div class="cat-cards-grid" style="margin-top:8px">${breakdownCards}</div>
+      </div>
+      <div class="card glass" style="margin-top:16px">
+        <h3>Top 5 Categories</h3><div class="sub">Highest spend this month</div>
+        <div style="margin-top:6px">${top5Rows}</div>
+      </div>`;
   } else if(repTab==='forecast'){
     const series=forecastSeries(12);
     const nextMonth=series[1]||series[0], yearEnd=series[series.length-1];
