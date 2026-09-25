@@ -2883,7 +2883,7 @@ async function legacyLocalInit(){
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { getFirestore, doc, getDoc, setDoc }
+  import { getFirestore, doc, getDoc, setDoc, collection, getDocs, writeBatch }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
   const firebaseConfig = {
@@ -2907,6 +2907,15 @@ async function legacyLocalInit(){
   let currentUID = null;
   let cloudSaveTimer = null;
 
+  /* Per-transaction sync: each transaction is its own document in
+     users/{uid}/transactions/{id}, so the store never hits Firestore's
+     1 MiB-per-document limit no matter how many transactions pile up.
+     Categories/accounts/currency/rates stay in the small main user doc.
+     lastSyncedTx tracks what Firestore currently holds so saves only
+     write/delete what actually changed instead of rewriting everything. */
+  let lastSyncedTx = new Map(); // txId(string) -> JSON string snapshot of what's in Firestore
+  const txKey = t => String(t.id);
+
   /* Debounced write: waits 800ms after the last change before writing to
      Firestore, so rapid edits (typing an amount, etc.) don't fire a write
      per keystroke. */
@@ -2915,10 +2924,42 @@ async function legacyLocalInit(){
     clearTimeout(cloudSaveTimer);
     cloudSaveTimer = setTimeout(async ()=>{
       try{
+        const st = window.__getState();
+
+        // 1) main doc: categories/accounts/currency/rates — small, cheap to always write
         await setDoc(doc(db,'users',currentUID), {
-          data: JSON.stringify(window.__getState()),
+          categories: st.categories,
+          accounts: st.accounts,
+          currency: st.currency,
+          rates: st.rates || {},
           updatedAt: new Date().toISOString()
         });
+
+        // 2) diff transactions against last known Firestore snapshot
+        const currentMap = new Map(st.transactions.map(t=>[txKey(t), JSON.stringify(t)]));
+        const toWrite = [], toDelete = [];
+        for(const [id,json] of currentMap){
+          if(lastSyncedTx.get(id)!==json) toWrite.push([id, JSON.parse(json)]);
+        }
+        for(const id of lastSyncedTx.keys()){
+          if(!currentMap.has(id)) toDelete.push(id);
+        }
+
+        // 3) write in batches of 450 (Firestore's batch limit is 500 ops)
+        const ops = [
+          ...toWrite.map(([id,t])=>({type:'set',id,t})),
+          ...toDelete.map(id=>({type:'delete',id}))
+        ];
+        for(let i=0;i<ops.length;i+=450){
+          const batch = writeBatch(db);
+          ops.slice(i,i+450).forEach(op=>{
+            const ref = doc(db,'users',currentUID,'transactions',op.id);
+            if(op.type==='set') batch.set(ref, op.t); else batch.delete(ref);
+          });
+          await batch.commit();
+        }
+
+        lastSyncedTx = currentMap;
         window.__cloudSaveOk = true;
       }catch(e){
         window.__cloudSaveOk = false;
@@ -2930,12 +2971,24 @@ async function legacyLocalInit(){
 
   async function loadFromCloud(uid){
     try{
-      const snap = await getDoc(doc(db,'users',uid));
-      if(snap.exists() && snap.data() && snap.data().data){
-        window.__setState(JSON.parse(snap.data().data));
-      } else {
-        window.__setState(defaultState());
-      }
+      const metaSnap = await getDoc(doc(db,'users',uid));
+      const txSnap = await getDocs(collection(db,'users',uid,'transactions'));
+      const transactions = [];
+      txSnap.forEach(d=>{
+        const t = d.data();
+        t.id = isNaN(Number(d.id)) ? d.id : Number(d.id); // keep numeric ids numeric, matches rest of app
+        transactions.push(t);
+      });
+      lastSyncedTx = new Map(transactions.map(t=>[txKey(t), JSON.stringify(t)]));
+
+      const m = metaSnap.exists() ? metaSnap.data() : {};
+      window.__setState({
+        categories: m.categories || defaultCats.map(c=>({...c})),
+        accounts: m.accounts || ['Cash'],
+        currency: m.currency || 'USD',
+        rates: m.rates || {},
+        transactions
+      });
     }catch(e){
       console.error('Cloud load failed:', e);
       window.__setState(defaultState());
