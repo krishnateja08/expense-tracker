@@ -3203,17 +3203,20 @@ function renderRight(){
   if(navSection==='planning'||navSection==='reports') return; // full width
   const header=document.getElementById('rightHeader');
   const listEl=document.getElementById('txList');
-  const tx=periodTx();
+  /* Expenses page -> spend-only; Incomes page -> income-only; every other section keeps the full mix */
+  const kindFilter = navSection==='expenses' ? 'spend' : navSection==='incomes' ? 'income' : null;
+  const groupKind = kindFilter || 'spend';
+  const tx = kindFilter ? periodTx().filter(t=>t.kind===kindFilter) : periodTx();
 
   if(rightMode==='cat' && catDrill){
     const c=catById(catDrill);
-    const items=tx.filter(t=>t.kind==='spend' && t.category===catDrill);
+    const items=tx.filter(t=>t.kind===groupKind && t.category===catDrill);
     const total=items.reduce((s,t)=>s+t.amount,0);
     header.className='back-header';
     header.innerHTML=`<button class="backbtn" id="backBtn">‹</button><div class="title">${c.name}</div>`;
     document.getElementById('backBtn').addEventListener('click',()=>{ catDrill=null; expandedTags=new Set(); renderRight(); });
 
-    if(items.length===0){ listEl.innerHTML='<div class="empty">No expenses in this category yet</div>'; return; }
+    if(items.length===0){ listEl.innerHTML=`<div class="empty">No ${groupKind==='income'?'income':'expenses'} in this category yet</div>`; return; }
 
     const byTag={};
     items.forEach(t=>{
@@ -3229,9 +3232,9 @@ function renderRight(){
       const expanded=expandedTags.has(tag);
       const sub = expanded ? tagItems.map(t=>{
         const dLabel=new Date(t.date+'T00:00:00').toLocaleDateString();
-        return `<div class="subentry" data-id="${t.id}"><span class="subdate">${dLabel}</span><span class="amt spend">${fmt(t.amount)}</span><span class="chev">›</span></div>`;
+        return `<div class="subentry" data-id="${t.id}"><span class="subdate">${dLabel}</span><span class="amt ${groupKind}">${fmt(t.amount)}</span><span class="chev">›</span></div>`;
       }).join('') : '';
-      return `<div class="tag-row" data-tag="${tag}" style="cursor:pointer"><span class="ic">#</span><span class="n">${tag}</span><span class="amt spend">${fmt(val)}</span></div>${sub}`;
+      return `<div class="tag-row" data-tag="${tag}" style="cursor:pointer"><span class="ic">#</span><span class="n">${tag}</span><span class="amt ${groupKind}">${fmt(val)}</span></div>${sub}`;
     }).join('');
 
     const sortedItems=[...items].sort((a,b)=>b.date.localeCompare(a.date)||b.id-a.id);
@@ -3239,7 +3242,7 @@ function renderRight(){
 
     listEl.innerHTML=`
       <div class="tag-row" style="border-bottom:2px solid var(--line);padding-top:16px;">
-        <span class="n" style="font-weight:700;color:var(--ink)">${c.name}</span><span class="amt spend">${fmt(total)}</span>
+        <span class="n" style="font-weight:700;color:var(--ink)">${c.name}</span><span class="amt ${groupKind}">${fmt(total)}</span>
       </div>
       ${tagRows}
       <div class="section-label">Transactions</div>
@@ -3273,7 +3276,7 @@ function renderRight(){
     listEl.innerHTML=Object.entries(groups).map(([date,items])=>{
       const dLabel=new Date(date+'T00:00:00').toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
       const rows=items.map(t=>itemRow(t)).join('');
-      const dayTotal=items.filter(t=>t.kind==='spend').reduce((a,t)=>a+t.amount,0);
+      const dayTotal=items.filter(t=>t.kind===groupKind).reduce((a,t)=>a+t.amount,0);
       return `<div class="day-group${collapsedDays.has(date)?' collapsed':''}" data-date="${date}"><div class="day-head" data-date="${date}"><span>${dLabel}</span><span class="day-total">${fmt(dayTotal)}</span></div><div class="day-items">${rows}</div></div>`;
     }).join('');
     listEl.querySelectorAll('.day-head').forEach(h=>h.addEventListener('click',()=>{
@@ -3287,12 +3290,12 @@ function renderRight(){
     }));
     listEl.querySelectorAll('.item[data-id]').forEach(row=>row.addEventListener('click',()=>openDetail(row.dataset.id)));
   } else {
-    const byCat={}; tx.forEach(t=>{ if(t.kind==='spend'){ byCat[t.category]=(byCat[t.category]||0)+t.amount; } });
+    const byCat={}; tx.forEach(t=>{ if(t.kind===groupKind){ byCat[t.category]=(byCat[t.category]||0)+t.amount; } });
     const order=Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
     listEl.innerHTML = order.length ? order.map(([cid,total])=>{
       const c=catById(cid);
-      return `<div class="cat-row" data-cat="${cid}"><span class="swatch" style="width:8px;height:8px;border-radius:50%;background:${c.color}"></span><span class="n">${c.name}</span><span class="amt">${fmt(total)}</span></div>`;
-    }).join('') : '<div class="empty">No expenses yet</div>';
+      return `<div class="cat-row" data-cat="${cid}"><span class="swatch" style="width:8px;height:8px;border-radius:50%;background:${c.color}"></span><span class="n">${c.name}</span><span class="amt ${groupKind}">${fmt(total)}</span></div>`;
+    }).join('') : `<div class="empty">No ${groupKind==='income'?'income':'expenses'} yet</div>`;
     listEl.querySelectorAll('.cat-row').forEach(row=>row.addEventListener('click',()=>{
       catDrill=row.dataset.cat; expandedTags=new Set(); renderRight();
     }));
