@@ -817,6 +817,25 @@
   .sim-impact .si{text-align:center;padding:10px 6px;border-radius:10px;background:var(--panel2);}
   .sim-impact .si .siv{font-size:16px;font-weight:800;} .sim-impact .si .sil{font-size:10.5px;color:var(--ink-dim);margin-top:2px;}
 
+  /* ===== Category Analyzer ===== */
+  .az-filterbar{padding:18px 20px;margin-bottom:16px;}
+  .az-filter-row{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;}
+  .az-filter-field{display:flex;flex-direction:column;gap:6px;min-width:170px;}
+  .az-filter-field label{font-size:10.5px;color:var(--ink-dim);text-transform:uppercase;letter-spacing:.5px;font-weight:600;}
+  .az-filter-field select, .az-filter-field input{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+    padding:10px 12px;color:var(--ink);font-size:13px;outline:none;font-family:inherit;}
+  .az-filter-field select:focus, .az-filter-field input:focus{border-color:var(--accent);}
+  .az-analyze-btn{padding:11px 28px;border-radius:10px;border:none;background:linear-gradient(135deg,var(--accent),#B0105A);
+    color:#fff;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap;box-shadow:0 6px 18px rgba(232,23,93,.28);}
+  .az-analyze-btn:hover{opacity:.92;transform:translateY(-1px);}
+  .az-kpi-row{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px;}
+  @media (max-width:1300px){ .az-kpi-row{grid-template-columns:repeat(3,1fr);} }
+  @media (max-width:640px){ .az-kpi-row{grid-template-columns:repeat(2,1fr);} }
+  .az-kpi .k-val{font-size:18px;}
+  .az-kpi .k-sub{font-size:11px;color:var(--ink-dim);margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .az-dist-pct{font-size:30px;font-weight:800;letter-spacing:-.5px;}
+  .az-dist-sub{color:var(--ink-dim);font-size:12.5px;}
+
   .goal-input{background:none;border:none;border-bottom:1px dashed var(--glass-brd);color:var(--ink);font-weight:700;
     font-size:14px;width:90px;outline:none;}
 </style>
@@ -2378,7 +2397,7 @@ function renderPlanning(el){
 
 /* ---------- Reports module ---------- */
 let repTab='overview';
-const REP_TABS=[['overview','Overview'],['categories','Categories'],['trends','Trends'],['annual','Annual'],['insights','Insights'],['heatmap','Leaderboard'],['forecast','Forecast'],['export','Export']];
+const REP_TABS=[['overview','Overview'],['analyzer','Category Analyzer'],['categories','Categories'],['trends','Trends'],['annual','Annual'],['insights','Insights'],['heatmap','Leaderboard'],['forecast','Forecast'],['export','Export']];
 
 function yearTx(y){ return state.transactions.filter(t=>t.date.slice(0,4)===String(y)); }
 function catSpendMap(list){ const m={}; list.filter(t=>t.kind==='spend').forEach(t=>m[t.category]=(m[t.category]||0)+t.amount); return m; }
@@ -2474,6 +2493,8 @@ function renderReports(el){
           <span style="font-weight:700;font-size:13px">Total Potential Savings</span><span style="font-weight:800;font-size:20px;color:var(--income)">${fmt(totalPotential)}</span>
         </div>
       </div>`;
+  } else if(repTab==='analyzer'){
+    body=renderCategoryAnalyzer();
   } else if(repTab==='categories'){
     const increases=Object.keys({...curCat,...prevCat}).map(cid=>({cid,delta:(curCat[cid]||0)-(prevCat[cid]||0)}))
       .filter(r=>r.delta>0.01).sort((a,b)=>b.delta-a.delta);
@@ -2868,6 +2889,7 @@ function renderReports(el){
       const v=parseFloat(goalInput.value); if(!isNaN(v)&&v>0){ savingsGoalTarget=v; try{localStorage.setItem('ledger-savings-goal',v);}catch(e){} renderReports(el); }
     });
   }
+  if(repTab==='analyzer') bindAnalyzerEvents(el);
   const csvBtn=document.getElementById('expCSV');
   if(csvBtn) csvBtn.addEventListener('click',exportTransactionsCSV);
   const pdfBtn=document.getElementById('expPDF'); if(pdfBtn) pdfBtn.addEventListener('click',()=>showToast('PDF export isn\u2019t wired up yet'));
@@ -2883,6 +2905,223 @@ function exportTransactionsCSV(){
   const blob=new Blob([csv],{type:'text/csv'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='ledger-transactions.csv'; a.click();
   showToast('CSV downloaded');
+}
+
+/* ---------- Category Analyzer ---------- */
+let analyzerCat=null;
+let analyzerRange='thisMonth';
+let analyzerCustomFrom='';
+let analyzerCustomTo='';
+const ANALYZER_RANGES=[['thisMonth','This Month'],['lastMonth','Last Month'],['last3','Last 3 Months'],['last6','Last 6 Months'],['thisYear','This Year'],['lastYear','Last Year'],['custom','Custom Range']];
+
+function ymd(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function analyzerRangeDates(range,customFrom,customTo){
+  const now=new Date(), y=now.getFullYear(), m=now.getMonth();
+  let start,end;
+  if(range==='lastMonth'){ start=new Date(y,m-1,1); end=new Date(y,m,0); }
+  else if(range==='last3'){ start=new Date(y,m-2,1); end=new Date(y,m+1,0); }
+  else if(range==='last6'){ start=new Date(y,m-5,1); end=new Date(y,m+1,0); }
+  else if(range==='thisYear'){ start=new Date(y,0,1); end=new Date(y,11,31); }
+  else if(range==='lastYear'){ start=new Date(y-1,0,1); end=new Date(y-1,11,31); }
+  else if(range==='custom'){ start=customFrom?new Date(customFrom+'T00:00:00'):new Date(y,m,1); end=customTo?new Date(customTo+'T00:00:00'):new Date(y,m+1,0); }
+  else { start=new Date(y,m,1); end=new Date(y,m+1,0); } // thisMonth default
+  if(end<start){ const t=start; start=end; end=t; }
+  return {start,end};
+}
+function prevPeriodRange(start,end){
+  const days=Math.round((end-start)/86400000)+1;
+  const prevEnd=new Date(start); prevEnd.setDate(prevEnd.getDate()-1);
+  const prevStart=new Date(prevEnd); prevStart.setDate(prevStart.getDate()-days+1);
+  return {start:prevStart,end:prevEnd};
+}
+function txInRange(t,start,end){ const d=new Date(t.date+'T00:00:00'); return d>=start && d<=end; }
+function monthKeysBetween(start,end){
+  const keys=[]; let d=new Date(start.getFullYear(),start.getMonth(),1);
+  const endD=new Date(end.getFullYear(),end.getMonth(),1);
+  let guard=0;
+  while(d<=endD && guard<60){
+    keys.push({key:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`, label:d.toLocaleDateString(undefined,{month:'short',year:'numeric'})});
+    d=new Date(d.getFullYear(),d.getMonth()+1,1); guard++;
+  }
+  return keys;
+}
+function azKpi(icon,label,val,sub){
+  return `<div class="kpi glass az-kpi">
+    <div class="k-lbl" style="display:flex;align-items:center;gap:6px"><span>${icon}</span>${label}</div>
+    <div class="k-val amt">${val}</div>
+    ${sub?`<div class="az-kpi-sub k-sub">${sub}</div>`:''}
+  </div>`;
+}
+function analyzerTrendChart(monthTotals){
+  const w=900,h=220,pad=30;
+  const vals=monthTotals.map(m=>m.total);
+  const maxV=Math.max(1,...vals);
+  const X=i=> monthTotals.length>1 ? pad+(i/(monthTotals.length-1))*(w-pad*2) : w/2;
+  const Y=v=> h-pad-(v/maxV)*(h-pad*2);
+  const pts=monthTotals.map((m,i)=>[X(i),Y(m.total)]);
+  const lineD=pts.map((p,i)=>(i===0?'M':'L')+p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  const areaD=pts.length ? `M${pts[0][0].toFixed(1)},${(h-pad).toFixed(1)} `+pts.map(p=>`L${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ')+` L${pts[pts.length-1][0].toFixed(1)},${(h-pad).toFixed(1)} Z` : '';
+  const markers=pts.map((p)=>`<circle cx="${p[0]}" cy="${p[1]}" r="4" fill="var(--accent)" stroke="var(--bg)" stroke-width="2"/>`).join('');
+  return `<div class="fc-plot">
+      <svg class="fc-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+        <path d="${areaD}" fill="var(--accent)" opacity=".12"/>
+        <path d="${lineD}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        ${markers}
+      </svg>
+      <div class="fc-cols" id="azCols">${monthTotals.map((m,i)=>`<div class="fc-col" data-i="${i}"></div>`).join('')}</div>
+      <div class="fc-tip" id="azTip"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:6px">${monthTotals.map(m=>`<span style="flex:1;text-align:center;font-size:11px;color:var(--ink-dim)">${m.label}</span>`).join('')}</div>`;
+}
+function renderCategoryAnalyzer(){
+  if(!analyzerCat || !state.categories.find(c=>c.id===analyzerCat)) analyzerCat=(state.categories[0]||{}).id||'other';
+  const cat=catById(analyzerCat);
+  const {start,end}=analyzerRangeDates(analyzerRange,analyzerCustomFrom,analyzerCustomTo);
+  const {start:pStart,end:pEnd}=prevPeriodRange(start,end);
+
+  const allSpendInRange=state.transactions.filter(t=>t.kind==='spend' && txInRange(t,start,end));
+  const catTx=allSpendInRange.filter(t=>t.category===analyzerCat).sort((a,b)=>b.date.localeCompare(a.date));
+  const prevCatTx=state.transactions.filter(t=>t.kind==='spend' && t.category===analyzerCat && txInRange(t,pStart,pEnd));
+
+  const totalSpent=catTx.reduce((s,t)=>s+t.amount,0);
+  const txCount=catTx.length;
+  const monthKeys=monthKeysBetween(start,end);
+  const monthsSpanned=Math.max(1,monthKeys.length);
+  const avgMonthly=totalSpent/monthsSpanned;
+  const avgTx=txCount?totalSpent/txCount:0;
+  const highest=catTx.length?catTx.reduce((a,b)=>b.amount>a.amount?b:a):null;
+  const lowest=catTx.length?catTx.reduce((a,b)=>b.amount<a.amount?b:a):null;
+
+  const totalAllSpend=allSpendInRange.reduce((s,t)=>s+t.amount,0);
+  const sharePct=totalAllSpend?totalSpent/totalAllSpend*100:0;
+
+  const prevTotal=prevCatTx.reduce((s,t)=>s+t.amount,0);
+  const periodChangePct=pct(totalSpent,prevTotal);
+
+  const monthTotals=monthKeys.map(mk=>({...mk,total:catTx.filter(t=>t.date.slice(0,7)===mk.key).reduce((s,t)=>s+t.amount,0)}));
+  const maxMonth=monthTotals.length?monthTotals.reduce((a,b)=>b.total>a.total?b:a):null;
+  const maxMonthVal=Math.max(1,...monthTotals.map(m=>m.total));
+
+  const merchMap={};
+  catTx.forEach(t=>{ const key=(t.note&&t.note.trim())?t.note.trim():cat.name; if(!merchMap[key]) merchMap[key]={count:0,total:0}; merchMap[key].count++; merchMap[key].total+=t.amount; });
+  const merchants=Object.entries(merchMap).map(([name,v])=>({name,...v,avg:v.total/v.count})).sort((a,b)=>b.total-a.total);
+  const topMerchant=merchants[0]||null;
+  const topMerchantShare=topMerchant&&totalSpent?topMerchant.total/totalSpent*100:0;
+
+  /* Filter bar */
+  const filterBar=`<div class="card glass az-filterbar">
+    <div class="az-filter-row">
+      <div class="az-filter-field"><label>Category</label>
+        <select id="anzCategory">${state.categories.map(c=>`<option value="${c.id}" ${c.id===analyzerCat?'selected':''}>${c.icon||''} ${c.name}</option>`).join('')}</select>
+      </div>
+      <div class="az-filter-field"><label>Date Range</label>
+        <select id="anzRange">${ANALYZER_RANGES.map(([k,t])=>`<option value="${k}" ${k===analyzerRange?'selected':''}>${t}</option>`).join('')}</select>
+      </div>
+      ${analyzerRange==='custom'?`
+      <div class="az-filter-field"><label>From</label><input type="date" id="anzFrom" value="${analyzerCustomFrom||ymd(start)}"></div>
+      <div class="az-filter-field"><label>To</label><input type="date" id="anzTo" value="${analyzerCustomTo||ymd(end)}"></div>`:''}
+      <button class="az-analyze-btn" id="anzGo">Analyze</button>
+    </div>
+  </div>`;
+
+  /* KPI cards */
+  const kpis=`<div class="az-kpi-row">
+    ${azKpi('💳','Total Spent',fmt(totalSpent))}
+    ${azKpi('🧾','Transaction Count',txCount)}
+    ${azKpi('📅','Avg Monthly Spend',fmt(avgMonthly))}
+    ${azKpi('➗','Avg Transaction',fmt(avgTx))}
+    ${azKpi('🔺','Highest Expense',highest?fmt(highest.amount):'—',highest?(highest.note||cat.name):'')}
+    ${azKpi('🔻','Lowest Expense',lowest?fmt(lowest.amount):'—',lowest?(lowest.note||cat.name):'')}
+  </div>`;
+
+  /* Trend chart */
+  const trendCard=`<div class="card glass fc-hero"><h3>${cat.icon||''} ${cat.name} Spending Trend</h3><div class="sub">${new Date(start).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})} – ${new Date(end).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})}</div>
+    ${monthTotals.length?analyzerTrendChart(monthTotals):'<div class="empty">No data for this range</div>'}
+  </div>`;
+
+  /* Monthly breakdown */
+  const monthlyRows=monthTotals.length?monthTotals.map(m=>`<div class="wf-row"><span class="wn">${m.label}</span><div class="wf-track"><div class="wf-fill" style="width:${m.total/maxMonthVal*100}%;background:${cat.color}"></div></div><span class="wv">${fmt(m.total)}</span></div>`).join(''):'<div class="empty">No data for this range</div>';
+  const monthlyCard=`<div class="card glass"><h3>Monthly Breakdown</h3><div class="sub">${cat.name} spending by month</div>${monthlyRows}</div>`;
+
+  /* Distribution */
+  const distCard=`<div class="card glass">
+    <h3>Spending Distribution</h3><div class="sub">${cat.name} share of total spending in this period</div>
+    <div style="display:flex;align-items:baseline;gap:10px;margin:4px 0 12px">
+      <span class="az-dist-pct">${sharePct.toFixed(0)}%</span>
+      <span class="az-dist-sub">of total spending · ${fmt(totalSpent)} of ${fmt(totalAllSpend)}</span>
+    </div>
+    <div class="budget-track" style="height:10px"><div class="budget-fill" style="width:${Math.min(100,sharePct)}%;background:${cat.color}"></div></div>
+  </div>`;
+
+  /* Top merchants */
+  const merchRows=merchants.slice(0,10).map(m=>`<tr><td>${m.name}</td><td>${m.count}</td><td>${fmt(m.total)}</td><td>${fmt(m.avg)}</td></tr>`).join('');
+  const merchCard=`<div class="card glass" style="margin-bottom:16px"><h3>Top Merchants</h3><div class="sub">Merchants contributing most to ${cat.name}</div>
+    <div style="overflow-x:auto"><table class="catf-table"><thead><tr><th>Merchant</th><th>Transactions</th><th>Total Amount</th><th>Average</th></tr></thead>
+    <tbody>${merchRows||'<tr><td colspan="4" class="empty">No transactions in this period</td></tr>'}</tbody></table></div></div>`;
+
+  /* Transaction breakdown */
+  const shownTx=catTx.slice(0,50);
+  const txRows=shownTx.map(t=>{
+    const dLabel=new Date(t.date+'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
+    const desc=(t.tags&&t.tags.length)?t.tags.join(', '):cat.name;
+    return `<tr><td>${dLabel}</td><td>${t.note||cat.name}</td><td>${desc}</td><td>${t.account||'—'}</td><td class="amt spend" style="text-align:right">-${fmt(Math.abs(t.amount))}</td></tr>`;
+  }).join('');
+  const txCard=`<div class="card glass" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:2px;flex-wrap:wrap">
+      <div><h3 style="margin-bottom:2px">Transaction Breakdown</h3><div class="sub" style="margin:0">${catTx.length} matching · showing ${shownTx.length}</div></div>
+    </div>
+    <div style="overflow-x:auto"><table class="exp-table">
+      <thead><tr><th>Date</th><th>Merchant</th><th>Description</th><th>Payment Method</th><th style="text-align:right">Amount</th></tr></thead>
+      <tbody>${txRows||'<tr><td colspan="5" class="empty">No transactions found</td></tr>'}</tbody>
+    </table></div>
+  </div>`;
+
+  /* Insights */
+  const insights=[];
+  if(totalAllSpend>0) insights.push({ok:true,t:`<b>${cat.name}</b> accounts for <b>${sharePct.toFixed(0)}%</b> of all spending in this period`});
+  if(txCount>0) insights.push({ok:true,t:`Average monthly spending is <b>${fmt(avgMonthly)}</b>`});
+  if(maxMonth && maxMonth.total>0) insights.push({ok:false,t:`Highest spending month was <b>${maxMonth.label}</b> at <b>${fmt(maxMonth.total)}</b>`});
+  if(prevTotal>0) insights.push({ok:periodChangePct<=0,t:`Spending ${periodChangePct>=0?'increased':'decreased'} by <b>${Math.abs(periodChangePct).toFixed(0)}%</b> compared with the previous period`});
+  if(topMerchant && topMerchantShare>0) insights.push({ok:topMerchantShare<40,t:`Top merchant <b>${topMerchant.name}</b> contributes <b>${topMerchantShare.toFixed(0)}%</b> of category spending`});
+  if(!catTx.length) insights.push({ok:true,t:'No transactions found for this category and date range'});
+  const insightsCard=`<div class="card glass" style="margin-bottom:16px"><h3>Insights</h3><div class="sub">Automatic read on ${cat.name} spending</div>
+    <div class="insights">${insights.map(i=>`<div class="insight-row"><span class="em">${i.ok?'✓':'⚠️'}</span><span>${i.t}</span></div>`).join('')}</div></div>`;
+
+  return `${filterBar}${kpis}${trendCard}
+    <div class="rep-grid2">${monthlyCard}${distCard}</div>
+    ${merchCard}${txCard}${insightsCard}`;
+}
+function bindAnalyzerEvents(el){
+  const apply=()=>renderReports(el);
+  const catSel=document.getElementById('anzCategory');
+  if(catSel) catSel.addEventListener('change',()=>{ analyzerCat=catSel.value; apply(); });
+  const rangeSel=document.getElementById('anzRange');
+  if(rangeSel) rangeSel.addEventListener('change',()=>{ analyzerRange=rangeSel.value; apply(); });
+  const fromInp=document.getElementById('anzFrom');
+  if(fromInp) fromInp.addEventListener('change',()=>{ analyzerCustomFrom=fromInp.value; });
+  const toInp=document.getElementById('anzTo');
+  if(toInp) toInp.addEventListener('change',()=>{ analyzerCustomTo=toInp.value; });
+  const goBtn=document.getElementById('anzGo');
+  if(goBtn) goBtn.addEventListener('click',apply);
+  const azCols=document.getElementById('azCols'), azTip=document.getElementById('azTip');
+  if(azCols && azTip){
+    const {start,end}=analyzerRangeDates(analyzerRange,analyzerCustomFrom,analyzerCustomTo);
+    const cat=catById(analyzerCat);
+    const catTx=state.transactions.filter(t=>t.kind==='spend' && t.category===analyzerCat && txInRange(t,start,end));
+    const monthKeys=monthKeysBetween(start,end);
+    const monthTotals=monthKeys.map(mk=>({...mk,total:catTx.filter(t=>t.date.slice(0,7)===mk.key).reduce((s,t)=>s+t.amount,0)}));
+    azCols.querySelectorAll('.fc-col').forEach(col=>{
+      const show=()=>{
+        const i=+col.dataset.i, s=monthTotals[i]; if(!s) return;
+        azTip.innerHTML=`<div class="m">${s.label}</div><div class="v" style="color:${cat.color}">${fmt(s.total)}</div>`;
+        azTip.style.display='block';
+        const left=col.offsetLeft+col.offsetWidth/2;
+        azTip.style.left=left+'px'; azTip.style.top='4px';
+      };
+      col.addEventListener('mouseenter',show); col.addEventListener('click',show);
+      col.addEventListener('mouseleave',()=>{ azTip.style.display='none'; });
+    });
+  }
 }
 
 let reportsChangeDrill=null;
