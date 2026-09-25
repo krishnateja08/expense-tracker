@@ -1,3 +1,10 @@
+/* Pulls the Ledger data out of Firestore and writes ONE combined JSON
+   snapshot to backups/backup.json. Matches the per-transaction schema:
+     users/{uid}                     -> categories, accounts, currency, rates
+     users/{uid}/transactions/{txId} -> one doc per transaction
+   Run via `node backup.js` with FIREBASE_SERVICE_ACCOUNT_KEY set in the env
+   (see the accompanying GitHub Actions workflow). */
+
 const admin = require('firebase-admin');
 const fs = require('fs');
 const path = require('path');
@@ -7,9 +14,9 @@ admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
 (async () => {
-  const snapshot = await db.collection('users').get();
+  const usersSnap = await db.collection('users').get();
 
-  if (snapshot.empty) {
+  if (usersSnap.empty) {
     console.log('No users found in Firestore yet. Nothing to back up.');
     process.exit(0);
   }
@@ -17,25 +24,31 @@ const db = admin.firestore();
   const outDir = 'backups';
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir);
 
-  let count = 0;
-  snapshot.forEach((doc) => {
-    const uid = doc.id;
-    const raw = doc.data();
-    if (!raw || !raw.data) return;
+  const backup = { generatedAt: new Date().toISOString(), users: {} };
 
-    let state;
-    try {
-      state = JSON.parse(raw.data);
-    } catch (e) {
-      console.error('Skipping ' + uid + ': stored data is not valid JSON.');
-      return;
-    }
+  for (const userDoc of usersSnap.docs) {
+    const uid = userDoc.id;
+    const meta = userDoc.data() || {};
 
-    fs.writeFileSync(path.join(outDir, uid + '.json'), JSON.stringify(state, null, 2));
-    count++;
-  });
+    const txSnap = await db.collection('users').doc(uid).collection('transactions').get();
+    const transactions = [];
+    txSnap.forEach((d) => {
+      const t = d.data();
+      t.id = isNaN(Number(d.id)) ? d.id : Number(d.id); // keep numeric ids numeric, matches the app
+      transactions.push(t);
+    });
 
-  console.log('Backed up ' + count + ' user(s) into the backups/ folder.');
+    backup.users[uid] = {
+      categories: meta.categories || [],
+      accounts: meta.accounts || ['Cash'],
+      currency: meta.currency || 'USD',
+      rates: meta.rates || {},
+      transactions
+    };
+  }
+
+  fs.writeFileSync(path.join(outDir, 'backup.json'), JSON.stringify(backup, null, 2));
+  console.log('Backed up ' + Object.keys(backup.users).length + ' user(s) into backups/backup.json.');
 })().catch((e) => {
   console.error('Backup failed:', e);
   process.exit(1);
