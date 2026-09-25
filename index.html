@@ -722,6 +722,7 @@ async function idbSet(k,v){ const db=await idbOpen(); return new Promise((res,re
 function persist(){
   if(storageMode==='file'){ dirty=true; clearTimeout(saveTimer); saveTimer=setTimeout(flushSave,300); }
   else if(storageMode==='local'){ try{localStorage.setItem(STORAGE_KEY, JSON.stringify(state));}catch(e){} }
+  else if(storageMode==='cloud'){ window.__cloudSave && window.__cloudSave(); }
 }
 async function flushSave(){
   clearTimeout(saveTimer);
@@ -753,6 +754,10 @@ function updateStorageStatus(){
     el.className='storage-status warn';
     el.textContent='\u25CF Browser storage only';
     el.title = FS_OK ? 'Click to choose a data.json file instead' : 'This browser cannot open files. Use Chrome or Edge to load data.json.';
+  } else if(storageMode==='cloud'){
+    el.className='storage-status '+(window.__cloudSaveOk===false?'bad':'ok');
+    el.textContent = window.__cloudSaveOk===false ? '\u25CF Not synced! Check your connection' : '\u25CF Synced to your Google account';
+    el.title = 'Saved to your private cloud data, backed up to GitHub daily';
   } else { el.className='storage-status'; el.textContent=''; }
 }
 document.addEventListener('DOMContentLoaded',()=>{
@@ -820,6 +825,9 @@ async function useHandle(h){
   if(copied) showToast('Copied '+copied+' transactions from browser storage into '+h.name);
 }
 let state=defaultState();
+/* bridge so the Firebase module script (separate scope) can read/write state */
+window.__getState = () => state;
+window.__setState = (s) => { state = s; };
 function normalizeState(){
   if(!state.accounts) state.accounts=['Cash'];
   state.currency='USD'; // everything is stored and displayed in USD
@@ -2853,7 +2861,10 @@ detailOverlay.addEventListener('click',e=>{ if(e.target===detailOverlay) detailO
 
 
 /* ---------- startup ---------- */
-(async function init(){
+/* Legacy local-file / browser-storage init. Not run automatically any more:
+   since sign-in is required to enter the app, cloud storage (Firestore) takes
+   over as soon as the user authenticates (see the Firebase script below). */
+async function legacyLocalInit(){
   if(!FS_OK){ useLocal(); return; } // Safari/Firefox: browser storage only
   let h=null; try{ h=await idbGet('dataFile'); }catch(e){}
   if(h){
@@ -2864,14 +2875,16 @@ detailOverlay.addEventListener('click',e=>{ if(e.target===detailOverlay) detailO
     showGate('reconnect',h); return;
   }
   showGate('choose');
-})();
+}
 </script>
 
-<!-- ===== Firebase Authentication ===== -->
+<!-- ===== Firebase Authentication + Cloud data (Firestore) ===== -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import { getFirestore, doc, getDoc, setDoc }
+    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
   const firebaseConfig = {
     apiKey: "__FIREBASE_API_KEY__",
@@ -2884,14 +2897,58 @@ detailOverlay.addEventListener('click',e=>{ if(e.target===detailOverlay) detailO
 
   const firebaseApp = initializeApp(firebaseConfig);
   const auth = getAuth(firebaseApp);
+  const db = getFirestore(firebaseApp);
   const provider = new GoogleAuthProvider();
 
   const authGate = document.getElementById('authGate');
   const appRoot = document.getElementById('appRoot');
   const authErr = document.getElementById('authErr');
 
-  onAuthStateChanged(auth, (user) => {
+  let currentUID = null;
+  let cloudSaveTimer = null;
+
+  /* Debounced write: waits 800ms after the last change before writing to
+     Firestore, so rapid edits (typing an amount, etc.) don't fire a write
+     per keystroke. */
+  window.__cloudSave = function(){
+    if(!currentUID) return;
+    clearTimeout(cloudSaveTimer);
+    cloudSaveTimer = setTimeout(async ()=>{
+      try{
+        await setDoc(doc(db,'users',currentUID), {
+          data: JSON.stringify(window.__getState()),
+          updatedAt: new Date().toISOString()
+        });
+        window.__cloudSaveOk = true;
+      }catch(e){
+        window.__cloudSaveOk = false;
+        console.error('Cloud save failed:', e);
+      }
+      if(typeof updateStorageStatus === 'function') updateStorageStatus();
+    }, 800);
+  };
+
+  async function loadFromCloud(uid){
+    try{
+      const snap = await getDoc(doc(db,'users',uid));
+      if(snap.exists() && snap.data() && snap.data().data){
+        window.__setState(JSON.parse(snap.data().data));
+      } else {
+        window.__setState(defaultState());
+      }
+    }catch(e){
+      console.error('Cloud load failed:', e);
+      window.__setState(defaultState());
+    }
+    normalizeState();
+    storageMode = 'cloud';
+    renderAll();
+    if(typeof updateStorageStatus === 'function') updateStorageStatus();
+  }
+
+  onAuthStateChanged(auth, async (user) => {
     if(user){
+      currentUID = user.uid;
       authGate.classList.add('hidden');
       appRoot.classList.remove('gated');
       if(!document.getElementById('signOutBtn')){
@@ -2900,7 +2957,9 @@ detailOverlay.addEventListener('click',e=>{ if(e.target===detailOverlay) detailO
         btn.addEventListener('click',()=>signOut(auth));
         document.body.appendChild(btn);
       }
+      await loadFromCloud(user.uid);
     } else {
+      currentUID = null;
       authGate.classList.remove('hidden');
       appRoot.classList.add('gated');
       const existingBtn=document.getElementById('signOutBtn');
