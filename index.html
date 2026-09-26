@@ -825,6 +825,8 @@
   .az-filter-field select, .az-filter-field input{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
     padding:10px 12px;color:var(--ink);font-size:13px;outline:none;font-family:inherit;}
   .az-filter-field select:focus, .az-filter-field input:focus{border-color:var(--accent);}
+  .az-filter-field .tag-input-wrap{min-height:38px;padding:6px 12px;}
+  .az-filter-field .tag-input-wrap .combo-input{font-size:13px;}
   .az-analyze-btn{padding:11px 28px;border-radius:10px;border:none;background:linear-gradient(135deg,var(--accent),#B0105A);
     color:#fff;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap;box-shadow:0 6px 18px rgba(232,23,93,.28);}
   .az-analyze-btn:hover{opacity:.92;transform:translateY(-1px);}
@@ -2912,6 +2914,7 @@ let analyzerCat=null;
 let analyzerRange='thisMonth';
 let analyzerCustomFrom='';
 let analyzerCustomTo='';
+let analyzerTags=new Set();
 const ANALYZER_RANGES=[['thisMonth','This Month'],['lastMonth','Last Month'],['last3','Last 3 Months'],['last6','Last 6 Months'],['thisYear','This Year'],['lastYear','Last Year'],['custom','Custom Range']];
 
 function ymd(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
@@ -2980,8 +2983,9 @@ function renderCategoryAnalyzer(){
   const {start:pStart,end:pEnd}=prevPeriodRange(start,end);
 
   const allSpendInRange=state.transactions.filter(t=>t.kind==='spend' && txInRange(t,start,end));
-  const catTx=allSpendInRange.filter(t=>t.category===analyzerCat).sort((a,b)=>b.date.localeCompare(a.date));
-  const prevCatTx=state.transactions.filter(t=>t.kind==='spend' && t.category===analyzerCat && txInRange(t,pStart,pEnd));
+  const tagMatch=t=>!analyzerTags.size || (t.tags||[]).some(tag=>analyzerTags.has(tag));
+  const catTx=allSpendInRange.filter(t=>t.category===analyzerCat && tagMatch(t)).sort((a,b)=>b.date.localeCompare(a.date));
+  const prevCatTx=state.transactions.filter(t=>t.kind==='spend' && t.category===analyzerCat && tagMatch(t) && txInRange(t,pStart,pEnd));
 
   const totalSpent=catTx.reduce((s,t)=>s+t.amount,0);
   const txCount=catTx.length;
@@ -3013,6 +3017,15 @@ function renderCategoryAnalyzer(){
     <div class="az-filter-row">
       <div class="az-filter-field"><label>Category</label>
         <select id="anzCategory">${state.categories.map(c=>`<option value="${c.id}" ${c.id===analyzerCat?'selected':''}>${c.icon||''} ${c.name}</option>`).join('')}</select>
+      </div>
+      <div class="az-filter-field" style="min-width:200px">
+        <label>Tags</label>
+        <div class="picker-field combo-wrap tag-input-wrap" id="anzTagsField" style="cursor:text">
+          <span class="ic">#</span>
+          <div class="tag-chips-inline" id="anzTagChipsInline"></div>
+          <input type="text" id="anzTagsInput" class="combo-input" placeholder="${analyzerTags.size?'':'All tags'}" autocomplete="off">
+          <div class="combo-dropdown" id="anzTagsDropdown" style="display:none"></div>
+        </div>
       </div>
       <div class="az-filter-field"><label>Date Range</label>
         <select id="anzRange">${ANALYZER_RANGES.map(([k,t])=>`<option value="${k}" ${k===analyzerRange?'selected':''}>${t}</option>`).join('')}</select>
@@ -3094,7 +3107,55 @@ function renderCategoryAnalyzer(){
 function bindAnalyzerEvents(el){
   const apply=()=>renderReports(el);
   const catSel=document.getElementById('anzCategory');
-  if(catSel) catSel.addEventListener('change',()=>{ analyzerCat=catSel.value; apply(); });
+  if(catSel) catSel.addEventListener('change',()=>{ analyzerCat=catSel.value; analyzerTags=new Set(); apply(); });
+
+  /* Tags multi-select combo: chips + dropdown, scoped to this render pass */
+  const renderAnzTagChips=()=>{
+    const wrap=document.getElementById('anzTagChipsInline');
+    if(!wrap) return;
+    wrap.innerHTML=[...analyzerTags].map(tag=>
+      `<span class="tag-chip">${escapeHtml(tag)}<button type="button" class="tag-x" data-tag="${escapeHtml(tag)}">×</button></span>`
+    ).join('');
+    wrap.querySelectorAll('.tag-x').forEach(btn=>btn.addEventListener('click',e=>{
+      e.stopPropagation();
+      analyzerTags.delete(btn.dataset.tag);
+      apply();
+    }));
+  };
+  const renderAnzTagsDropdown=(query)=>{
+    const dd=document.getElementById('anzTagsDropdown');
+    if(!dd) return;
+    const pool=frequentTagsFor(analyzerCat).filter(t=>!analyzerTags.has(t));
+    const q=(query||'').toLowerCase();
+    const matches=q?pool.filter(t=>t.toLowerCase().includes(q)):pool;
+    dd.innerHTML=matches.length
+      ? matches.map(t=>`<button type="button" class="combo-opt" data-tag="${escapeHtml(t)}">#${escapeHtml(t)}</button>`).join('')
+      : `<div class="combo-empty">${pool.length?'No matching tags':'No tags used in this category yet'}</div>`;
+    dd.style.display='block';
+    dd.querySelectorAll('.combo-opt[data-tag]').forEach(btn=>btn.addEventListener('mousedown',e=>{
+      e.preventDefault();
+      analyzerTags.add(btn.dataset.tag);
+      apply();
+    }));
+  };
+  renderAnzTagChips();
+  const tagsInput=document.getElementById('anzTagsInput');
+  if(tagsInput){
+    tagsInput.addEventListener('focus',()=>renderAnzTagsDropdown(tagsInput.value.trim()));
+    tagsInput.addEventListener('input',()=>renderAnzTagsDropdown(tagsInput.value.trim()));
+    tagsInput.addEventListener('keydown',e=>{
+      if(e.key==='Backspace' && !tagsInput.value){
+        const last=[...analyzerTags].pop();
+        if(last){ analyzerTags.delete(last); apply(); }
+      } else if(e.key==='Escape'){ const dd=document.getElementById('anzTagsDropdown'); if(dd) dd.style.display='none'; tagsInput.blur(); }
+    });
+    tagsInput.addEventListener('blur',()=>{
+      setTimeout(()=>{ if(document.activeElement!==tagsInput){ const dd=document.getElementById('anzTagsDropdown'); if(dd) dd.style.display='none'; } },150);
+    });
+  }
+  const tagsField=document.getElementById('anzTagsField');
+  if(tagsField) tagsField.addEventListener('click',e=>{ if(e.target!==tagsInput) tagsInput&&tagsInput.focus(); });
+
   const rangeSel=document.getElementById('anzRange');
   if(rangeSel) rangeSel.addEventListener('change',()=>{ analyzerRange=rangeSel.value; apply(); });
   const fromInp=document.getElementById('anzFrom');
@@ -3107,7 +3168,8 @@ function bindAnalyzerEvents(el){
   if(azCols && azTip){
     const {start,end}=analyzerRangeDates(analyzerRange,analyzerCustomFrom,analyzerCustomTo);
     const cat=catById(analyzerCat);
-    const catTx=state.transactions.filter(t=>t.kind==='spend' && t.category===analyzerCat && txInRange(t,start,end));
+    const tagMatch=t=>!analyzerTags.size || (t.tags||[]).some(tag=>analyzerTags.has(tag));
+    const catTx=state.transactions.filter(t=>t.kind==='spend' && t.category===analyzerCat && tagMatch(t) && txInRange(t,start,end));
     const monthKeys=monthKeysBetween(start,end);
     const monthTotals=monthKeys.map(mk=>({...mk,total:catTx.filter(t=>t.date.slice(0,7)===mk.key).reduce((s,t)=>s+t.amount,0)}));
     azCols.querySelectorAll('.fc-col').forEach(col=>{
