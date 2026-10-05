@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Ledger</title>
+<script>
+/* Theme: 'auto' (follow device), 'dark' or 'light' - saved per browser */
+(function(){try{var t=localStorage.getItem('ledger-theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -11,13 +15,13 @@
   :root{
     --bg:#0B0C10; --sidebar:#0F1115; --panel:#151821; --panel2:#1B1F2A; --line:rgba(255,255,255,.08);
     --ink:#F3F4F8; --ink-dim:#8B90A3; --accent:#FF0F6D; --accent2:#7C3AED; --income:#22C55E; --spend:#FF4D6D; --warn:#F59E0B;
-    --glass:rgba(255,255,255,.035); --glass-brd:rgba(255,255,255,.09);
+    --glass:rgba(255,255,255,.035); --glass-brd:rgba(255,255,255,.09); --bg-glow:#1a0e18; color-scheme:dark;
     --r:16px; --shadow:0 10px 30px rgba(0,0,0,.45); --glow:0 0 0 1px var(--glass-brd),0 8px 24px rgba(255,15,109,.08);
     box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
   }
   html{scroll-padding-top:env(safe-area-inset-top,0px); height:100%;}
   *{box-sizing:border-box;}
-  body{margin:0;background:radial-gradient(1200px 700px at 15% -10%,#1a0e18 0%,var(--bg) 45%),var(--bg);color:var(--ink);height:100%;
+  body{margin:0;background:radial-gradient(1200px 700px at 15% -10%,var(--bg-glow) 0%,var(--bg) 45%),var(--bg);color:var(--ink);height:100%;
     font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;}
   .glass{background:var(--glass);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
     border:1px solid var(--glass-brd);border-radius:var(--r);box-shadow:var(--shadow);}
@@ -285,10 +289,13 @@
     .body-cols{flex-direction:column;}
     .menu-toggle{display:inline-block;}
   }
+  /* Light theme: applies when user picks Light, or when set to Auto and the device prefers light */
+  :root[data-theme="light"]{--bg:#F4F5F9;--sidebar:#FFFFFF;--panel:#FFFFFF;--panel2:#EEF0F6;--line:#E3E6EF;--ink:#1B1E27;--ink-dim:#767C90;--glass:rgba(0,0,0,.025);--glass-brd:rgba(0,0,0,.09);--bg-glow:#FBE8F0;--shadow:0 10px 30px rgba(20,24,40,.12);color-scheme:light;}
   @media (prefers-color-scheme: light){
-    :root:not([data-theme="dark"]){--bg:#F4F5F9;--sidebar:#FFFFFF;--panel:#FFFFFF;--panel2:#EEF0F6;
-      --line:#E3E6EF;--ink:#1B1E27;--ink-dim:#767C90;}
+    :root:not([data-theme="dark"]):not([data-theme="light"]){--bg:#F4F5F9;--sidebar:#FFFFFF;--panel:#FFFFFF;--panel2:#EEF0F6;--line:#E3E6EF;--ink:#1B1E27;--ink-dim:#767C90;--glass:rgba(0,0,0,.025);--glass-brd:rgba(0,0,0,.09);--bg-glow:#FBE8F0;--shadow:0 10px 30px rgba(20,24,40,.12);color-scheme:light;}
   }
+  .theme-btn{border:none;background:var(--panel2);color:var(--ink);padding:7px 11px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;}
+  .theme-btn:hover{background:var(--panel);outline:1px solid var(--line);}
 
   /* ===== Premium dashboard additions ===== */
   .dash-title{font-size:20px;font-weight:700;letter-spacing:-.3px;margin:0 0 2px;}
@@ -1165,6 +1172,7 @@
         <button id="tabMonthly" class="active">Monthly</button>
         <button id="tabDaily">Daily</button>
       </div>
+      <button class="theme-btn" id="themeBtn" title="Switch theme">Theme</button>
     </div>
 
     <div class="body-cols">
@@ -4371,6 +4379,22 @@ async function legacyLocalInit(){
     e.stopPropagation();
     signOut(auth);
   });
+</script>
+<script>
+(function(){
+  var btn=document.getElementById('themeBtn'), root=document.documentElement;
+  var mq=window.matchMedia?window.matchMedia('(prefers-color-scheme: light)'):null;
+  function pref(){try{var t=localStorage.getItem('ledger-theme');return (t==='dark'||t==='light')?t:'auto';}catch(e){return 'auto';}}
+  function apply(t){
+    if(t==='auto') root.removeAttribute('data-theme'); else root.setAttribute('data-theme',t);
+    try{ if(t==='auto') localStorage.removeItem('ledger-theme'); else localStorage.setItem('ledger-theme',t); }catch(e){}
+    if(btn) btn.textContent = t==='dark'?'\u263E Dark':t==='light'?'\u2600 Light':'\u25D0 Auto';
+  }
+  apply(pref());
+  if(btn) btn.addEventListener('click',function(){
+    var order=['auto','light','dark']; apply(order[(order.indexOf(pref())+1)%3]);
+  });
+})();
 </script>
 </body>
 </html>
