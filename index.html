@@ -3508,6 +3508,7 @@ function doImport(){
   if(replaceOnImport){
     const ok=window.confirm(`This will delete all ${state.transactions.length} transactions currently saved and replace them with this file. Continue?`);
     if(!ok) return;
+    autoBackup('before-csv-replace');
     state.transactions=[];
   }
 
@@ -3602,6 +3603,7 @@ function renderBackupUI(el){
     if(!first) return;
     const second=window.confirm('Really sure? Consider downloading a backup first if you haven\u2019t.');
     if(!second) return;
+    autoBackup('before-delete-all');
     state={categories:[...defaultCats], transactions:[], accounts:['Cash'], currency:state.currency||'USD'};
     persist();
     showToast('All data deleted');
@@ -3613,6 +3615,7 @@ function renderBackupUI(el){
   document.getElementById('swapKindBtn').addEventListener('click',()=>{
     const ok=window.confirm(`Swap the type of all ${tx} transactions (income becomes expense, expense becomes income)? This can't be undone, but you can always restore from a backup afterward.`);
     if(!ok) return;
+    autoBackup('before-swap');
     state.transactions.forEach(t=>{ t.kind = t.kind==='income' ? 'spend' : 'income'; });
     persist();
     showToast('Swapped income and expense for all transactions');
@@ -3633,18 +3636,33 @@ function renderBackupUI(el){
   input.addEventListener('change',e=>{ if(e.target.files[0]) handleJSONFile(e.target.files[0]); });
 }
 
-function exportJSON(){
+/* Backup filename includes the signed-in user's email so files from different users never look alike.
+   label: '' for a manual backup, or e.g. 'before-restore' for an automatic safety copy. */
+function backupFileName(label){
+  const who=String(window.__userEmail||'local').toLowerCase().replace(/[^a-z0-9@._-]+/g,'-').replace(/@/g,'_at_');
+  const d=new Date(), pad=n=>String(n).padStart(2,'0');
+  const stamp=ymd(d)+(label?'_'+pad(d.getHours())+pad(d.getMinutes())+pad(d.getSeconds()):'');
+  return `ledger-${label?label+'-':'backup-'}${who}-${stamp}.json`;
+}
+function downloadBackup(label){
   const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
-  const stamp=ymd(new Date());
-  a.href=url; a.download=`ledger-backup-${stamp}.json`;
+  a.href=url; a.download=backupFileName(label||'');
   a.style.display='none';
   document.body.appendChild(a); a.click();
   // give the browser time to start the download before releasing the file (large backups get cut off otherwise)
   setTimeout(()=>{ a.remove(); URL.revokeObjectURL(url); },10000);
-  showToast('Backup downloaded');
 }
+/* Safety copy before anything that replaces or wipes data. Skipped when there is nothing to lose. */
+function autoBackup(label){
+  try{
+    if(!state || !state.transactions || !state.transactions.length) return;
+    downloadBackup(label);
+    showToast('Safety backup downloaded first');
+  }catch(e){ console.error('Auto backup failed',e); }
+}
+function exportJSON(){ downloadBackup(''); showToast('Backup downloaded'); }
 
 function handleJSONFile(file){
   const reader=new FileReader();
@@ -3658,6 +3676,7 @@ function handleJSONFile(file){
     }
     const ok=window.confirm(`Replace your current ${state.transactions.length} transactions with the ${parsed.transactions.length} from this backup? This can't be undone.`);
     if(!ok) return;
+    autoBackup('before-restore');
     state={...parsed, accounts:parsed.accounts||['Cash'], rates:parsed.rates||{}, currency:'USD'};
     persist();
     showToast('Backup restored');
@@ -4345,11 +4364,13 @@ async function legacyLocalInit(){
   onAuthStateChanged(auth, async (user) => {
     if(user){
       currentUID = user.uid;
+      window.__userEmail = user.email || user.uid;
       authGate.classList.add('hidden');
       appRoot.classList.remove('gated');
       await loadFromCloud(user.uid);
     } else {
       currentUID = null;
+      window.__userEmail = null;
       authGate.classList.remove('hidden');
       appRoot.classList.add('gated');
       const menu=document.getElementById('profileMenu');
